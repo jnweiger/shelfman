@@ -1,0 +1,3 @@
+[submodule "ptouch-print"]
+	path = ptouch-print
+	url = https://git.familie-radermacher.ch/linux/ptouch-print.git
