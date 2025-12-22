@@ -39,6 +39,7 @@ ptouch-print/build/ptouch-print:
 
 clean:
 	rm -rf ptouch-print/build
+	cd ptouch-print && git restore po/ptouch.pot	# git reset --hard for one file.
 	@echo "\nYou can also do: make uninstall"
 
 
