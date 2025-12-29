@@ -5,13 +5,45 @@
 #include <stdio.h>	// for printf()
 #include <fcntl.h>	// O_RDWR
 #include <unistd.h>	// write()
+#include <stdint.h>	// uint8_t, uint16_t
+
 #include "lodepng.h"
 
-#define BW_THRESHOLD 150	// something between 1 and 255
+#define PROGMEM		/* NOOP */
 
-unsigned char* image = NULL;
-unsigned width, height;
-unsigned error;  // Declare without init
+#define _ADAFRUIT_GFX_H	/* so that nothing else gets included */
+#include "gfxfont.h"
+#include "Fonts/FreeSans9pt7b.h"
+#include "Fonts/FreeSans12pt7b.h"
+#include "Fonts/FreeSans18pt7b.h"
+#include "Fonts/FreeSans24pt7b.h"
+
+// #include "Fonts/FreeSansBold12pt7b.h"
+// #include "Fonts/FreeSansBold18pt7b.h"
+// #include "Fonts/FreeSansBold24pt7b.h"
+// #include "Fonts/FreeSansBold9pt7b.h"
+// #include "Fonts/FreeSerif12pt7b.h"
+// #include "Fonts/FreeSerif18pt7b.h"
+// #include "Fonts/FreeSerif24pt7b.h"
+// #include "Fonts/FreeSerif9pt7b.h"
+
+
+struct font_table {
+  unsigned size;
+  unsigned scale;
+  const GFXfont *ptr;
+} fonts[] = {
+  { 9,  1, &FreeSans9pt7b },
+  { 12, 1, &FreeSans12pt7b },
+  { 18, 1, &FreeSans18pt7b },
+  { 24, 1, &FreeSans24pt7b },
+  { 36, 2, &FreeSans18pt7b },
+  { 48, 2, &FreeSans24pt7b },
+  { 54, 3, &FreeSans18pt7b },
+  { 72, 3, &FreeSans24pt7b }
+};
+
+#define BW_THRESHOLD 150	// something between 1 and 255, used for loading png.
 
 struct img {
   unsigned w, h;
@@ -109,7 +141,10 @@ unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, uns
 
 int main(int ac, char **av)
 {
-    error = lodepng_decode32_file(&image, &width, &height, av[1]);
+	unsigned char* image = NULL;
+	unsigned width, height;
+
+    unsigned error = lodepng_decode32_file(&image, &width, &height, av[1]);
     if (error) {
         printf("%s %s: PNG error %u: %s\n", av[0], av[1], error, lodepng_error_text(error));
         return 1;
