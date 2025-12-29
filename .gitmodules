@@ -1,3 +1,9 @@
 [submodule "ptouch-print"]
 	path = ptouch-print
 	url = https://git.familie-radermacher.ch/linux/ptouch-print.git
+[submodule "Adafruit-GFX-Library"]
+	path = Adafruit-GFX-Library
+	url = https://github.com/adafruit/Adafruit-GFX-Library
+[submodule "lodepng"]
+	path = lodepng
+	url = https://github.com/lvandeve/lodepng
