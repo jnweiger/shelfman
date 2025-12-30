@@ -43,8 +43,7 @@ def parse_args():
     group.add_argument("-p", "--print", dest="do_print", action="store_true", help="Generate QR code and send via ptouch-print")
     parser.add_argument("-o", "--output", default=outfile, help=f"Output file (default: {outfile})")
     # maybe restict the letter by adding below: choices=["X", "I", "C", "L"]
-    parser.add_argument("letter", nargs="?", default="X", help="Label type: X=any, I=item, C=container, L=location (default: X)"
-)
+    parser.add_argument("letter", nargs="?", default="X", help="Label type: X=any, I=item, C=container, L=location (default: X)")
     return parser.parse_args()
 
 

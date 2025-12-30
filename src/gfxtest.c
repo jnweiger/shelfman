@@ -81,57 +81,6 @@ void img_save(struct img *im, const char *filename)
 }
 
 
-void blit0(struct img *src, unsigned sx, unsigned sy, unsigned sw, unsigned sh,
-           struct img *dst, unsigned dx, unsigned dy,
-           unsigned char flags)
-{
-    // flags |= 0x40 : do not copy black pixels
-    // flags |= 0x80 : do not copy white pixels
-    // reaining bits: (flags & 0x3f):	spread, min 1.
-    unsigned char *ps = src->data + sy*src->w + sx;
-    unsigned char *pd = dst->data + dy*dst->w + dx;
-    unsigned copy_b = (flags & 0x40) ? 0 : 1;
-    unsigned copy_w = (flags & 0x80) ? 0 : 1;
-    unsigned spread = (flags & 0x3f) | 0x01;
-
-    for (unsigned j = 0; j < sh; j++)
-    {
-		for (unsigned i = 0; i < sw; i++)
-		{
-		    if (((sx + i) < (src->w)) && 
-			    ((sy + j) < (src->h)))
-			{
-			    // We are inside the src image
-		        unsigned val = ps[j*src->w + i];
-				if ((val == 0) ? copy_b : copy_w)
-				{
-				    if (((dx + spread * i) < (dst->w)) &&
-						((dy + spread * j) < (dst->h)))
-				    {
-					    // We are inside the dst image
-					    pd[spread*j*dst->w + spread*i] = val;
-				    }
-				}
-			}
-		}
-    }
-}
-
-void blit(struct img *src, unsigned sx, unsigned sy, unsigned sw, unsigned sh,
-          struct img *dst, unsigned dx, unsigned dy,
-          unsigned char flags)
-{
-    unsigned spread = (flags & 0x3f) | 0x01;
-    for (unsigned j = 0; j < spread; j++)
-    {
-		for (unsigned i = 0; i < spread; i++)
-		{
-			blit0(src, sx, sy, sw, sh,  dst, dx+i, dy+j,  flags);
-		}
-	}
-}
-
-
 void rectangle(struct img *im, unsigned x, unsigned y, unsigned w, unsigned h, unsigned val)
 {
     unsigned char *p = im->data + y*im->w + x;
@@ -140,13 +89,46 @@ void rectangle(struct img *im, unsigned x, unsigned y, unsigned w, unsigned h, u
     {
 		for (unsigned int i = 0; i < w; i++)
 		{
-		    if (((x + i) < (im->w)) && 
+		    if (((x + i) < (im->w)) &&
 			    ((y + j) < (im->h)))
 			{
 				p[j*im->w + i] = val;
 			}
 		}
 	}
+}
+
+
+void blit(struct img *src, unsigned sx, unsigned sy, unsigned sw, unsigned sh,
+          struct img *dst, unsigned dx, unsigned dy,
+          unsigned char flags)
+{
+    // flags |= 0x40 : do not copy black pixels
+    // flags |= 0x80 : do not copy white pixels
+    // reaining bits: (flags & 0x3f):	spread, min 1.
+    unsigned char *ps = src->data + sy*src->w + sx;
+    // unsigned char *pd = dst->data + dy*dst->w + dx;
+    unsigned copy_b = (flags & 0x40) ? 0 : 1;
+    unsigned copy_w = (flags & 0x80) ? 0 : 1;
+    unsigned spread = (flags & 0x3f);
+	if (!spread) spread = 1;
+
+    for (unsigned j = 0; j < sh; j++)
+    {
+		for (unsigned i = 0; i < sw; i++)
+		{
+		    if (((sx + i) < (src->w)) &&
+			    ((sy + j) < (src->h)))
+			{
+			    // We are inside the src image
+		        unsigned val = ps[j*src->w + i];
+				if ((val == 0) ? copy_b : copy_w)
+				{
+			        rectangle(dst, dx + spread * i, dy + spread * j, spread, spread, val);
+				}
+			}
+		}
+    }
 }
 
 
@@ -178,21 +160,30 @@ uint32_t rand32(void)
 }
 
 // needs buf[20]
-void hex16_string(unsigned char *buf)
+void hex16_string(char *buf)
 {
     uint32_t r = rand32();
-    sprintf((char *)buf, "%08x-%04x-%04x", rand32(), (r & 0xffff), (r >> 16));
+    sprintf(buf, "%08x-%04x-%04x", rand32(), (r & 0xffff), (r >> 16));
 }
 
 
-int render_qrcode(struct img *im, unsigned x, unsigned y, unsigned margin, qrcodegen_Ecc ecc, unsigned vers, const char *text, unsigned flags)
+int render_qrcode(struct img *im, unsigned x, unsigned y, unsigned margin, const char *ecc_letter, unsigned vers, const char *text, unsigned flags)
 {
-    unsigned copy_b = (flags & 0x40) ? 0 : 1;
-    unsigned copy_w = (flags & 0x80) ? 0 : 1;
-    unsigned spread = (flags & 0x3f) | 0x01;
-
     uint8_t qrcode[qrcodegen_BUFFER_LEN_MAX];
 	uint8_t tempBuffer[qrcodegen_BUFFER_LEN_MAX];
+
+    unsigned copy_b = (flags & 0x40) ? 0 : 1;
+    unsigned copy_w = (flags & 0x80) ? 0 : 1;
+    unsigned spread = (flags & 0x3f);
+	if (!spread) spread = 1;
+
+	qrcodegen_Ecc ecc = qrcodegen_Ecc_QUARTILE;
+
+	if      (ecc_letter[0] == 'L') ecc=qrcodegen_Ecc_LOW;
+	else if (ecc_letter[0] == 'M') ecc=qrcodegen_Ecc_MEDIUM;
+	else if (ecc_letter[0] == 'Q') ecc=qrcodegen_Ecc_QUARTILE;
+	else if (ecc_letter[0] == 'H') ecc=qrcodegen_Ecc_HIGH;
+	else printf("Unknown ecc letter '%s', expected L, M, Q, H\n", ecc_letter);
 
 	bool ok = qrcodegen_encodeText(text, tempBuffer, qrcode, ecc, vers, vers, qrcodegen_Mask_AUTO, true);
 	if (!ok) return -1;
@@ -221,7 +212,7 @@ int main(int ac, char **av)
 {
 	unsigned char* image = NULL;
 	unsigned width, height;
-	unsigned char uid16[20];
+	char uid16[40];
 
 #ifdef __linux__
     srand(time(NULL));
@@ -229,37 +220,53 @@ int main(int ac, char **av)
     stdio_init_all();
     rtc_init();
 #endif
+    const char *letter = "X";
+	if (ac > 1) letter = av[1];
 
-	hex16_string(uid16);
+    sprintf(uid16, "SFM-%s-", letter);
+	hex16_string(uid16+strlen(uid16));
 	printf("uid16=%s\n", uid16);
 
-    unsigned error = lodepng_decode32_file(&image, &width, &height, av[1]);
-    if (error) {
-        printf("%s %s: PNG error %u: %s\n", av[0], av[1], error, lodepng_error_text(error));
-        return 1;
-    }
-    printf("Loaded PNG %ux%u\n", width, height);
+    if (ac > 2)
+	{
+		unsigned error = lodepng_decode32_file(&image, &width, &height, av[2]);
+		if (error) {
+			printf("%s %s %s: PNG error %u: %s\n", av[0], av[1], av[2], error, lodepng_error_text(error));
+			return 1;
+		}
+		printf("Loaded PNG %ux%u\n", width, height);
+	}
+	else
+	{
+	    width = 300;
+		height = 120;
+		printf("canvas size: %ux%u\n", width, height);
+	}
 
     struct img *bw = img_new(width, height, 255);
 
-    // image is now width*height*4 RGBA bytes.
-    // Convert to black and white, as bytes.
-    for (unsigned int i = 0; i < width * height; i++) {
-        if ((image[4*i+3] < BW_THRESHOLD) || 	// ALPHA
-	    ((image[4*i+0] < BW_THRESHOLD) &&	// R
-	     (image[4*i+1] < BW_THRESHOLD) &&	// G
-	     (image[4*i+2] < BW_THRESHOLD)))	// B
-		bw->data[i] = 0;
-    }
-    free(image);
-    // bw image is now width*height bytes 0 or 255.
+    if (ac > 2)
+	{
+		// image is now width*height*4 RGBA bytes.
+		// Convert to black and white, as bytes.
+		for (unsigned int i = 0; i < width * height; i++) {
+			if ((image[4*i+3] < BW_THRESHOLD) || 	// ALPHA
+			((image[4*i+0] < BW_THRESHOLD) &&	// R
+			 (image[4*i+1] < BW_THRESHOLD) &&	// G
+			 (image[4*i+2] < BW_THRESHOLD)))	// B
+			bw->data[i] = 0;
+		}
+		free(image);
+		// bw image is now width*height bytes 0 or 255.
+	}
 
-    unsigned qrsize = render_qrcode(bw, 150, 0, 2, qrcodegen_Ecc_MEDIUM, 3, (const char *)uid16, 3);
+    unsigned qrsize = render_qrcode(bw, 150, 0, 2, "Q", 3, (const char *)uid16, 4);
 	printf("qrcde size = %d\n", qrsize);
 
     // write some font,
-    // draw_text(bw, 10, 50, "Hello World", 20);
-    // blit(bw, 10, 50, 400, 20,  bw, 10, 80, 10|0x80);
+    draw_text(bw, 10, 150, "Hello World", 20);
+    blit(bw, 10, 150, 400, 20,  bw, 10, 180, 6|0x80); // zoom on the text
+    blit(bw, 150, 0, qrsize, qrsize,  bw, 10, 300, 6|0x80); // zoom on QR code
 
     // save as PGM
     img_save(bw, "output.pgm");
