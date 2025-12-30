@@ -16,7 +16,10 @@
 # include "hardware/rng.h"
 #endif
 
-#include "lodepng.h"
+#define WITH_PNG_SUPPORT 0		// 1 or 0 to enable disable the png loader code.
+#if WITH_PNG_SUPPORT
+# include "lodepng.h"
+#endif
 
 #include "qrcodegen.h"
 
@@ -38,7 +41,7 @@
 // #include "Fonts/FreeSerif24pt7b.h"
 // #include "Fonts/FreeSerif9pt7b.h"
 
-struct font_table {
+struct font {
   unsigned size;
   unsigned scale;
   const GFXfont *ptr;
@@ -59,7 +62,6 @@ struct img {
   unsigned w, h;
   unsigned char data[0];
 };
-
 
 struct img *img_new(unsigned w, unsigned h, unsigned char val)
 {
@@ -133,14 +135,22 @@ void blit(struct img *src, unsigned sx, unsigned sy, unsigned sw, unsigned sh,
 
 
 // returns width in pixels.
-unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, unsigned font_size)
+unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, struct font *f, unsigned val)
 {
-    unsigned char *p = im->data + y*im->w + x;
-    for (unsigned int i = 0; i < font_size; i++)
+    unsigned char *p;
+
+	if (!im)
+	{
+		// measure lenght without drawing
+		return 4;
+	}
+
+    p = im->data + y*im->w + x;
+    for (unsigned int i = 0; i < f->size; i++)
     {
-        p[0] = 0;
-        p[1] = 0;
-        p[4] = 0;
+        p[0] = val;
+        p[1] = val;
+        p[4] = val;
         p += im->w;
         if (++y >= im->h)
           break;
@@ -207,10 +217,37 @@ int render_qrcode(struct img *im, unsigned x, unsigned y, unsigned margin, const
     return ss;
 }
 
+struct font *find_font(int size)
+{
+    for (int i = 0; i < (int)(sizeof(fonts)/sizeof(struct font)); i++)
+    {
+	    if (fonts[i].size >= (unsigned)size)
+			return fonts+i;
+	}
+	return NULL;
+}
+
 
 int main(int ac, char **av)
 {
-	unsigned char* image = NULL;
+	// config for brother D410
+	unsigned max_height = 120;		// my tape can print 120, although the printer could print 128.
+	unsigned big_font_size = 48;
+	unsigned small_font_size = 20;
+	unsigned hspace = 16;
+	unsigned vspace = 8;
+	const char *title_text = "JW";
+	const char *label_text_pre = "shelfman.de/";
+	const char *code_text = "-";
+#if WITH_PNG_SUPPORT
+	const char *outfile = "shelfman_guid_qr.pgm";	// FIXME: this should be a png file, see FIXME at end of main()
+#else
+	const char *outfile = "shelfman_guid_qr.pgm";
+#endif
+
+#if WITH_PNG_SUPPORT
+	unsigned char* pngimage = NULL;
+#endif
 	unsigned width, height;
 	char uid16[40];
 
@@ -222,14 +259,26 @@ int main(int ac, char **av)
 #endif
     const char *letter = "X";
 	if (ac > 1) letter = av[1];
+	char label_text[40];
+	snprintf(label_text, 40, "%s%s/", label_text_pre, letter);
 
     sprintf(uid16, "SFM-%s-", letter);
 	hex16_string(uid16+strlen(uid16));
 	printf("uid16=%s\n", uid16);
+	code_text = uid16;
 
+    font *small_font = find_font(small_font_size);
+    font *big_font   = find_font(big_font_size);
+
+	// measure lengths
+    unsigned title_w = draw_text(NULL, 0, 0, title_text, big_font, 0);
+	unsigned label_w = draw_text(NULL, 0, 0, label_text, small_font, 0);
+	unsigned code_w  = draw_text(NULL, 0, 0, code_text,  small_font, 0);
+
+#if WITH_PNG_SUPPORT
     if (ac > 2)
 	{
-		unsigned error = lodepng_decode32_file(&image, &width, &height, av[2]);
+		unsigned error = lodepng_decode32_file(&pngimage, &width, &height, av[2]);
 		if (error) {
 			printf("%s %s %s: PNG error %u: %s\n", av[0], av[1], av[2], error, lodepng_error_text(error));
 			return 1;
@@ -237,39 +286,65 @@ int main(int ac, char **av)
 		printf("Loaded PNG %ux%u\n", width, height);
 	}
 	else
+#endif
 	{
-	    width = 300;
-		height = 120;
+	    width = 0;
+		if (title_w > width) width = title_w;
+		if (label_w > width) width = label_w;
+		if (code_w  > width) width = code_w;
+        width = max_height + hspace + width + hspace;
+
+		height = max_height;
 		printf("canvas size: %ux%u\n", width, height);
 	}
 
     struct img *bw = img_new(width, height, 255);
 
+#if WITH_PNG_SUPPORT
     if (ac > 2)
 	{
-		// image is now width*height*4 RGBA bytes.
+		// pngimage is now width*height*4 RGBA bytes.
 		// Convert to black and white, as bytes.
 		for (unsigned int i = 0; i < width * height; i++) {
-			if ((image[4*i+3] < BW_THRESHOLD) || 	// ALPHA
-			((image[4*i+0] < BW_THRESHOLD) &&	// R
-			 (image[4*i+1] < BW_THRESHOLD) &&	// G
-			 (image[4*i+2] < BW_THRESHOLD)))	// B
+			if ((pngimage[4*i+3] < BW_THRESHOLD) || 	// ALPHA
+			((pngimage[4*i+0] < BW_THRESHOLD) &&	// R
+			 (pngimage[4*i+1] < BW_THRESHOLD) &&	// G
+			 (pngimage[4*i+2] < BW_THRESHOLD)))	// B
 			bw->data[i] = 0;
 		}
-		free(image);
+		free(pngimage);
 		// bw image is now width*height bytes 0 or 255.
 	}
+#endif
 
-    unsigned qrsize = render_qrcode(bw, 150, 0, 2, "Q", 3, (const char *)uid16, 4);
+    int qrsize = render_qrcode(bw, 0, 0, 2, "Q", 3, (const char *)uid16, 4);
 	printf("qrcde size = %d\n", qrsize);
+	if (qrsize < 0) return 1;
 
+    int y = vspace/2;
     // write some font,
-    draw_text(bw, 10, 150, "Hello World", 20);
-    blit(bw, 10, 150, 400, 20,  bw, 10, 180, 6|0x80); // zoom on the text
-    blit(bw, 150, 0, qrsize, qrsize,  bw, 10, 300, 6|0x80); // zoom on QR code
+    draw_text(bw, qrsize, y, "Hello World", small_font, 0);
+#if 0
+	draw_text(bw, qrsize + hspace + int((text_w - title_w)/2), y, title_text, big_font, 0);
+	y = y + big_font_size + int(1.5 * vspace);
+	draw_text(bw, qrsize + hspace + int((text_w - label_w)/2), y, label_text, small_font, 0);
+	y = y + small_font_size + vspace;
+	draw_text(qrsize + hspace + int((text_w - code_w)/2),  y, code_text,  small_font, 0);
+#endif
 
+#ifdef WITH_PNG_SUPPORT
+    // with a loaded png, we have space to play around.
+    blit(bw, 10, 150, 400, 20,  bw, 10, 180, 6|0x80); // zoom on the text
+    blit(bw, 0, 0, (unsigned)qrsize, (unsigned)qrsize,  bw, 10, 300, 6|0x80); // zoom on QR code
+#endif
+
+#ifdef WITH_PNG_SUPPORT
+    // FIXME, we should not save a PGM file here, we should save a proper PNG.
+    img_save(bw, outfile);
+#else
     // save as PGM
-    img_save(bw, "output.pgm");
+    img_save(bw, outfile);
+#endif
 
     free(bw);
     return 0;
