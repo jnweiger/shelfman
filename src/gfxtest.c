@@ -1,13 +1,24 @@
 /*
  * we only need one byte (gray) or one bit bw today.
  */
-#include <stdlib.h>	// for free()
-#include <stdio.h>	// for printf()
-#include <fcntl.h>	// O_RDWR
-#include <unistd.h>	// write()
-#include <stdint.h>	// uint8_t, uint16_t
+
+#ifdef __linux__
+# include <stdlib.h>	// for free()
+# include <stdio.h>	// for printf()
+# include <fcntl.h>	// O_RDWR
+# include <unistd.h>	// write()
+# include <stdint.h>	// uint8_t, uint16_t
+# include <string.h>
+# include <time.h>
+#else  // RP2040 Pico SDK
+# include "pico/stdlib.h"
+# include "hardware/rtc.h"
+# include "hardware/rng.h"
+#endif
 
 #include "lodepng.h"
+
+#include "qrcodegen.h"
 
 #define PROGMEM		/* NOOP */
 
@@ -26,7 +37,6 @@
 // #include "Fonts/FreeSerif18pt7b.h"
 // #include "Fonts/FreeSerif24pt7b.h"
 // #include "Fonts/FreeSerif9pt7b.h"
-
 
 struct font_table {
   unsigned size;
@@ -122,6 +132,24 @@ void blit(struct img *src, unsigned sx, unsigned sy, unsigned sw, unsigned sh,
 }
 
 
+void rectangle(struct img *im, unsigned x, unsigned y, unsigned w, unsigned h, unsigned val)
+{
+    unsigned char *p = im->data + y*im->w + x;
+
+    for (unsigned int j = 0; j < h; j++)
+    {
+		for (unsigned int i = 0; i < w; i++)
+		{
+		    if (((x + i) < (im->w)) && 
+			    ((y + j) < (im->h)))
+			{
+				p[j*im->w + i] = val;
+			}
+		}
+	}
+}
+
+
 // returns width in pixels.
 unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, unsigned font_size)
 {
@@ -138,11 +166,72 @@ unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, uns
     return 4;
 }
 
+uint32_t rand32(void)
+{
+#ifdef __linux__
+    return (rand() ^ (rand() << 15));	// make very sure, we have all 32bits.
+#else
+    uint32_t r;
+    rng_hw_get_bytes(&r, sizeof(r));
+    return r;
+#endif
+}
+
+// needs buf[20]
+void hex16_string(unsigned char *buf)
+{
+    uint32_t r = rand32();
+    sprintf((char *)buf, "%08x-%04x-%04x", rand32(), (r & 0xffff), (r >> 16));
+}
+
+
+int render_qrcode(struct img *im, unsigned x, unsigned y, unsigned margin, qrcodegen_Ecc ecc, unsigned vers, const char *text, unsigned flags)
+{
+    unsigned copy_b = (flags & 0x40) ? 0 : 1;
+    unsigned copy_w = (flags & 0x80) ? 0 : 1;
+    unsigned spread = (flags & 0x3f) | 0x01;
+
+    uint8_t qrcode[qrcodegen_BUFFER_LEN_MAX];
+	uint8_t tempBuffer[qrcodegen_BUFFER_LEN_MAX];
+
+	bool ok = qrcodegen_encodeText(text, tempBuffer, qrcode, ecc, vers, vers, qrcodegen_Mask_AUTO, true);
+	if (!ok) return -1;
+
+	unsigned size = qrcodegen_getSize(qrcode);
+    unsigned ss = size*spread+2*margin;
+
+    if (copy_w && copy_b) rectangle(im, x, y, ss, ss, 255);	// paint background white
+
+    for (unsigned int j = 0; j < size; j++)
+    {
+		for (unsigned int i = 0; i < size; i++)
+		{
+			unsigned val = qrcodegen_getModule(qrcode, i, j);
+			if ((val > 0) ? copy_b : copy_w)
+			{
+			  rectangle(im, x+margin+spread*i, y+margin+spread*j, spread, spread, ((val > 0) ? 0 : 255));
+			}
+		}
+	}
+    return ss;
+}
+
 
 int main(int ac, char **av)
 {
 	unsigned char* image = NULL;
 	unsigned width, height;
+	unsigned char uid16[20];
+
+#ifdef __linux__
+    srand(time(NULL));
+#else
+    stdio_init_all();
+    rtc_init();
+#endif
+
+	hex16_string(uid16);
+	printf("uid16=%s\n", uid16);
 
     unsigned error = lodepng_decode32_file(&image, &width, &height, av[1]);
     if (error) {
@@ -165,9 +254,12 @@ int main(int ac, char **av)
     free(image);
     // bw image is now width*height bytes 0 or 255.
 
+    unsigned qrsize = render_qrcode(bw, 150, 0, 2, qrcodegen_Ecc_MEDIUM, 3, (const char *)uid16, 3);
+	printf("qrcde size = %d\n", qrsize);
+
     // write some font,
-    draw_text(bw, 10, 50, "Hello World", 20);
-    blit(bw, 10, 50, 400, 20,  bw, 10, 80, 10|0x80);
+    // draw_text(bw, 10, 50, "Hello World", 20);
+    // blit(bw, 10, 50, 400, 20,  bw, 10, 80, 10|0x80);
 
     // save as PGM
     img_save(bw, "output.pgm");

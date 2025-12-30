@@ -7,3 +7,6 @@
 [submodule "lodepng"]
 	path = lodepng
 	url = https://github.com/lvandeve/lodepng
+[submodule "QR-Code-generator"]
+	path = QR-Code-generator
+	url = https://github.com/nayuki/QR-Code-generator
