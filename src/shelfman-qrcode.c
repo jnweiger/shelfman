@@ -20,6 +20,7 @@
 #if WITH_PNG_SUPPORT
 # include "lodepng.h"
 #endif
+#define GLYPH_BUF_SIZE (24*48)		// 24 is the largest font size we have, and twice that wide is fairly large.
 
 #include "qrcodegen.h"
 
@@ -155,8 +156,19 @@ unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, str
         if (++y >= im->h)
           break;
     }
+
+    uint8_t glyph_buf[GLYPH_BUF_SIZE];
+    GFXglyph *g = extract_glyph(f, text[0], uint8_t NULL, 0, 0);
+	if (g->width * g->height > 100)
+	{
+		printf("glyph dimension of '%c' (%d x %d) exceeds glyph_bytes[%d]\n", text[0], g->width, g->height, GLYPH_BUF_SIZE);
+		sys.exit(1);
+	}
+    (void)extract_glyph(f, text[0], glyph_buf, 255, 0);
+	blit(glyph_buf, 0, 0, g->width, g->height, im, x, y, f->scale);
     return 4;
 }
+
 
 uint32_t rand32(void)
 {
@@ -225,6 +237,38 @@ struct font *find_font(int size)
 			return fonts+i;
 	}
 	return NULL;
+}
+
+
+void bits2bytes(const uint8_t *bitmap, uint8_t *output, uint16_t width, uint16_t height, unsigned bg, unsigned fg)
+{
+    uint16_t pos = 0;
+
+    memset(output, bg, width * height);  // White background
+
+    for(uint16_t y = 0; y < height; y++) {
+        for(uint16_t x = 0; x < width; x++) {
+            // Get bit: MSB first (bit 7 is leftmost pixel)
+            uint16_t byte_idx = bitmap_offset + (pos / 8);
+            uint8_t bit_idx = 7 - (pos % 8);
+            if (bitmap[byte_idx] & (1 << bit_idx))
+				output[pos] = fg;
+            pos++;
+        }
+    }
+}
+
+
+GFXglyph *extract_glyph(struct font *f, unsigned char ch, uint8_t *output, unsigned bg, unsigned fg)
+{
+    GFXglyph *glyph = f->glyph[ ch - f->first ];
+
+	if (ch < f->first || ch > f->last) return NULL;
+
+    if (output)
+	    bits2bytes(f->ptr->bitmap + glyph->bitmapOffset, output, glyph->width, glyph->height, bg, fg);
+
+	return glyph;
 }
 
 
