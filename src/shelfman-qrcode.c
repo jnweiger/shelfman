@@ -16,7 +16,7 @@
 # include "hardware/rng.h"
 #endif
 
-#define WITH_PNG_SUPPORT 0		// 1 or 0 to enable disable the png loader code.
+#define WITH_PNG_SUPPORT 1		// 1 or 0 to enable disable the png loader code.
 #if WITH_PNG_SUPPORT
 # include "lodepng.h"
 #endif
@@ -72,6 +72,10 @@ struct img *img_new(unsigned w, unsigned h, unsigned char val)
 	return im;
 }
 
+void img_free(struct img *im)
+{
+    free((void *)(im));
+}
 
 void img_save(struct img *im, const char *filename)
 {
@@ -200,7 +204,10 @@ struct font *find_font(int size)
     for (int i = 0; i < (int)(sizeof(fonts)/sizeof(struct font)); i++)
     {
 	    if (fonts[i].size >= (unsigned)size)
+		{
+			printf("findfont(%d) -> size=%d, scale=%d, yAdvance=%d\n", size, fonts[i].size, fonts[i].scale, fonts[i].ptr->yAdvance);
 			return fonts+i;
+		}
 	}
 	return NULL;
 }
@@ -241,37 +248,29 @@ GFXglyph *extract_glyph(struct font *f, unsigned char ch, uint8_t *output, unsig
 // returns width in pixels.
 unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, struct font *f, unsigned val)
 {
-    unsigned char *p;
 
 	if (!im)
 	{
-		// measure lenght without drawing
+		// measure length without drawing
 		return 4;
 	}
 
-    p = im->data + y*im->w + x;
-    for (unsigned int i = 0; i < f->size; i++)
-    {
-        p[0] = val;
-        p[1] = val;
-        p[4] = val;
-        p += im->w;
-        if (++y >= im->h)
-          break;
-    }
+	unsigned orig_x = x;
+	unsigned tlen = strlen(text);
+    // unsigned char *p = im->data + y*im->w + x;
+    printf("%d,%d '%s' font size: %d, scale %d\n", x, y, text, f->size, f->scale);
+	for (unsigned c=0; c <= tlen; c++)
+	{
+		GFXglyph *g = extract_glyph(f, text[c], NULL, 0);
+		struct img *glyph_buf = img_new(g->width, g->height, 255);
 
-    // uint8_t glyph_buf[GLYPH_BUF_SIZE];
-    GFXglyph *g = extract_glyph(f, text[0], NULL, 0);
-	struct img *glyph_buf = img_new(g->width, g->height, 255);
-
-//	if (g->width * g->height > GLYPH_BUF_SIZE)
-//	{
-//		printf("glyph dimension of '%c' (%d x %d) exceeds glyph_bytes[%d]\n", text[0], g->width, g->height, GLYPH_BUF_SIZE);
-//		exit(1);
-//	}
-    (void)extract_glyph(f, text[0], glyph_buf->data, 0);
-	blit(glyph_buf, 0, 0, g->width, g->height, im, x, y, f->scale);
-    return 4;
+		printf("glyph dimension of '%c' (%d x %d) @ xAdv=%d, xOff=%d, yOff=%d\n", text[c], g->width, g->height, g->xAdvance, g->xOffset, g->yOffset);
+		(void)extract_glyph(f, text[c], glyph_buf->data, 0);
+		blit(glyph_buf, 0, 0, g->width, g->height, im, x+g->xOffset, y+g->yOffset, f->scale);
+		x += g->xAdvance;
+		img_free(glyph_buf);
+	}
+    return x - orig_x;
 }
 
 
@@ -279,8 +278,8 @@ int main(int ac, char **av)
 {
 	// config for brother D410
 	unsigned max_height = 120;		// my tape can print 120, although the printer could print 128.
-	unsigned big_font_size = 48;
-	unsigned small_font_size = 20;
+	unsigned big_font_size = 36;
+	unsigned small_font_size = 18;
 	unsigned hspace = 16;
 	unsigned vspace = 8;
 	const char *title_text = "JW";
@@ -370,7 +369,8 @@ int main(int ac, char **av)
 
     int y = vspace/2;
     // write some font,
-    draw_text(bw, qrsize, y, "Hello World", small_font, 0);
+    draw_text(bw, qrsize, y, "the quick brown fox jumps over the lazy dog.", small_font, 0);
+    draw_text(bw, qrsize, y+50, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG.", small_font, 0);
 #if 0
 	draw_text(bw, qrsize + hspace + int((text_w - title_w)/2), y, title_text, big_font, 0);
 	y = y + big_font_size + int(1.5 * vspace);
@@ -393,7 +393,7 @@ int main(int ac, char **av)
     img_save(bw, outfile);
 #endif
 
-    free(bw);
+    img_free(bw);
     return 0;
 }
 
