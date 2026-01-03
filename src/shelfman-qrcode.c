@@ -16,7 +16,15 @@
 # include "hardware/rng.h"
 #endif
 
-#define WITH_PNG_SUPPORT 1		// 1 or 0 to enable disable the png loader code.
+#define DEBUG 0
+#define BIG_FONT_SIZE 24
+#define SMALL_FONT_SIZE 18
+#define LINE_ADVANCE_FACTOR 1.9
+
+#ifndef WITH_PNG_SUPPORT
+# define WITH_PNG_SUPPORT 1		// 1 or 0 to enable disable the png loader code.
+#endif
+
 #if WITH_PNG_SUPPORT
 # include "lodepng.h"
 #endif
@@ -45,16 +53,17 @@
 struct font {
   unsigned size;
   unsigned scale;
+  int max_asc;			// initialized by find_font() - typically a negative number.
   const GFXfont *ptr;
 } fonts[] = {
-  { 9,  1, &FreeSans9pt7b },
-  { 12, 1, &FreeSans12pt7b },
-  { 18, 1, &FreeSans18pt7b },
-  { 24, 1, &FreeSans24pt7b },
-  { 36, 2, &FreeSans18pt7b },
-  { 48, 2, &FreeSans24pt7b },
-  { 54, 3, &FreeSans18pt7b },
-  { 72, 3, &FreeSans24pt7b }
+  { 9,  1, 0, &FreeSans9pt7b },
+  { 12, 1, 0, &FreeSans12pt7b },
+  { 18, 1, 0, &FreeSans18pt7b },
+  { 24, 1, 0, &FreeSans24pt7b },
+  { 36, 2, 0, &FreeSans18pt7b },
+  { 48, 2, 0, &FreeSans24pt7b },
+  { 54, 3, 0, &FreeSans18pt7b },
+  { 72, 3, 0, &FreeSans24pt7b }
 };
 
 #define BW_THRESHOLD 150	// something between 1 and 255, used for loading png.
@@ -199,14 +208,32 @@ int render_qrcode(struct img *im, unsigned x, unsigned y, unsigned margin, const
     return ss;
 }
 
+
+int find_highest_ascender(GFXglyph *g, int nglyphps)
+{
+    int off = g[0].yOffset;
+	for (int i = 0; i < nglyphps; i++)
+	{
+		// larger y values downwards.
+		if (off > g[i].yOffset)
+			off = g[i].yOffset;
+	}
+	return off;
+}
+
+
 struct font *find_font(int size)
 {
     for (int i = 0; i < (int)(sizeof(fonts)/sizeof(struct font)); i++)
     {
 	    if (fonts[i].size >= (unsigned)size)
 		{
-			printf("findfont(%d) -> size=%d, scale=%d, yAdvance=%d\n", size, fonts[i].size, fonts[i].scale, fonts[i].ptr->yAdvance);
-			return fonts+i;
+			struct font *f = fonts+i;
+			f->max_asc = find_highest_ascender(f->ptr->glyph, f->ptr->last - f->ptr->first);
+#if DEBUG > 0
+			printf("findfont(%d) -> size=%d, scale=%d, yAdvance=%d, max_asc=%d\n", size, f->size, f->scale, f->ptr->yAdvance, f->max_asc);
+#endif
+			return f;
 		}
 	}
 	return NULL;
@@ -248,26 +275,53 @@ GFXglyph *extract_glyph(struct font *f, unsigned char ch, uint8_t *output, unsig
 // returns width in pixels.
 unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, struct font *f, unsigned val)
 {
+	unsigned orig_x = x;
+	unsigned tlen = strlen(text);
 
 	if (!im)
 	{
 		// measure length without drawing
-		return 4;
+		// CAUTION: keep in sync with drawing code below.
+		for (unsigned c=0; c < tlen; c++)
+		{
+			char ch = text[c];
+			GFXglyph *g = extract_glyph(f, ch, NULL, 0);
+			if (!g)
+				g = extract_glyph(f, '_', NULL, 0);
+			if (g)
+		        x += f->scale * g->xAdvance;
+		}
+		return x - orig_x;
 	}
 
-	unsigned orig_x = x;
-	unsigned tlen = strlen(text);
-    // unsigned char *p = im->data + y*im->w + x;
+#if DEBUG > 0
     printf("%d,%d '%s' font size: %d, scale %d\n", x, y, text, f->size, f->scale);
-	for (unsigned c=0; c <= tlen; c++)
+#endif
+	for (unsigned c=0; c < tlen; c++)
 	{
-		GFXglyph *g = extract_glyph(f, text[c], NULL, 0);
+		// CAUTION: keep in sync with measurement code above.
+	    char ch = text[c];
+		GFXglyph *g = extract_glyph(f, ch, NULL, 0);
+		if (!g)
+		{
+		    printf("ERROR: glyph not found: '%c' -> replacing with '_'\n", ch);
+			ch = '_';
+		    g = extract_glyph(f, ch, NULL, 0);
+		    if (!g)
+			{
+				printf("ERROR: replacment glyph also not found: '%c'\n", ch);
+				exit(1);
+			}
+		}
 		struct img *glyph_buf = img_new(g->width, g->height, 255);
 
+#if DEBUG > 1
 		printf("glyph dimension of '%c' (%d x %d) @ xAdv=%d, xOff=%d, yOff=%d\n", text[c], g->width, g->height, g->xAdvance, g->xOffset, g->yOffset);
-		(void)extract_glyph(f, text[c], glyph_buf->data, 0);
-		blit(glyph_buf, 0, 0, g->width, g->height, im, x+g->xOffset, y+g->yOffset, f->scale);
-		x += g->xAdvance;
+#endif
+		(void)extract_glyph(f, ch, glyph_buf->data, 0);
+		blit(glyph_buf, 0, 0, g->width, g->height,
+			 im, x + (f->scale * g->xOffset), y + (f->scale * (g->yOffset - f->max_asc)), f->scale);
+		x += f->scale * g->xAdvance;
 		img_free(glyph_buf);
 	}
     return x - orig_x;
@@ -278,8 +332,6 @@ int main(int ac, char **av)
 {
 	// config for brother D410
 	unsigned max_height = 120;		// my tape can print 120, although the printer could print 128.
-	unsigned big_font_size = 36;
-	unsigned small_font_size = 18;
 	unsigned hspace = 16;
 	unsigned vspace = 8;
 	const char *title_text = "JW";
@@ -310,17 +362,27 @@ int main(int ac, char **av)
 
     sprintf(uid16, "SFM-%s-", letter);
 	hex16_string(uid16+strlen(uid16));
+#if DEBUG > 0
 	printf("uid16=%s\n", uid16);
+#endif
 	code_text = uid16;
 
-    font *small_font = find_font(small_font_size);
-    font *big_font   = find_font(big_font_size);
+    font *small_font = find_font(SMALL_FONT_SIZE);
+    font *big_font   = find_font(BIG_FONT_SIZE);
 
 	// measure lengths
     unsigned title_w = draw_text(NULL, 0, 0, title_text, big_font, 0);
 	unsigned label_w = draw_text(NULL, 0, 0, label_text, small_font, 0);
 	unsigned code_w  = draw_text(NULL, 0, 0, code_text,  small_font, 0);
 
+	unsigned max_text_w = 0;
+	if (title_w > max_text_w) max_text_w = title_w;
+	if (label_w > max_text_w) max_text_w = label_w;
+	if (code_w  > max_text_w) max_text_w = code_w;
+
+#if DEBUG > 1
+	printf("title_w=%d, label_w=%d, code_w=%d\n", title_w, label_w, code_w);
+#endif
 #if WITH_PNG_SUPPORT
     if (ac > 2)
 	{
@@ -334,14 +396,12 @@ int main(int ac, char **av)
 	else
 #endif
 	{
-	    width = 0;
-		if (title_w > width) width = title_w;
-		if (label_w > width) width = label_w;
-		if (code_w  > width) width = code_w;
-        width = max_height + hspace + width + hspace;
+        width = max_height + hspace + max_text_w + hspace;
 
 		height = max_height;
+#if DEBUG > 0
 		printf("canvas size: %ux%u\n", width, height);
+#endif
 	}
 
     struct img *bw = img_new(width, height, 255);
@@ -364,19 +424,22 @@ int main(int ac, char **av)
 #endif
 
     int qrsize = render_qrcode(bw, 0, 0, 2, "Q", 3, (const char *)uid16, 4);
+#if DEBUG > 0
 	printf("qrcde size = %d\n", qrsize);
+#endif
 	if (qrsize < 0) return 1;
 
     int y = vspace/2;
     // write some font,
-    draw_text(bw, qrsize, y, "the quick brown fox jumps over the lazy dog.", small_font, 0);
-    draw_text(bw, qrsize, y+50, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG.", small_font, 0);
 #if 0
-	draw_text(bw, qrsize + hspace + int((text_w - title_w)/2), y, title_text, big_font, 0);
-	y = y + big_font_size + int(1.5 * vspace);
-	draw_text(bw, qrsize + hspace + int((text_w - label_w)/2), y, label_text, small_font, 0);
-	y = y + small_font_size + vspace;
-	draw_text(qrsize + hspace + int((text_w - code_w)/2),  y, code_text,  small_font, 0);
+    draw_text(bw, qrsize, y,    "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG.", small_font, 0);
+    draw_text(bw, qrsize, y+50, "the quick brown fox jumps over the lazy dog.", big_font, 0);
+#else
+	draw_text(bw, qrsize + hspace + int((max_text_w - title_w)/2), y, title_text, big_font, 0);
+	y = y + int(LINE_ADVANCE_FACTOR * BIG_FONT_SIZE);
+	draw_text(bw, qrsize + hspace + int((max_text_w - label_w)/2), y, label_text, small_font, 0);
+	y = y + int(LINE_ADVANCE_FACTOR * SMALL_FONT_SIZE);
+	draw_text(bw, qrsize + hspace + int((max_text_w - code_w)/2),  y, code_text,  small_font, 0);
 #endif
 
 #ifdef WITH_PNG_SUPPORT
