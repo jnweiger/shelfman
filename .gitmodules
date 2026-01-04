@@ -10,3 +10,6 @@
 [submodule "QR-Code-generator"]
 	path = QR-Code-generator
 	url = https://github.com/nayuki/QR-Code-generator
+[submodule "src/rp2040/pico-sdk"]
+	path = src/rp2040/pico-sdk
+	url = https://github.com/raspberrypi/pico-sdk.git
