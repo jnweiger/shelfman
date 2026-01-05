@@ -1,5 +1,6 @@
 
-#include "stdio.h"
+#include <stdio.h>
+#include <stdbool.h>
 
 #ifdef TARGET_PICO
 #include "pico/stdlib.h"
@@ -10,7 +11,7 @@
 #endif
 
 #ifdef TARGET_LINUX
-# include "unistd.h"	// usleep()
+# include <unistd.h>	// usleep()
 # define sleep_ms(ms) usleep((ms)*1000)
 # define gpio_init(pin)
 # define gpio_set_dir_out(pin)
@@ -18,6 +19,7 @@
 # define gpio_put(pin, val)
 # define stdio_init_all()
 # define  stdio_usb_connected() 0
+:-(
 #endif
 
 #ifdef PICO_TARGET
