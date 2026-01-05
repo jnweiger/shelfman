@@ -1,10 +1,26 @@
+
 #include "stdio.h"
+
+#ifdef TARGET_PICO
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/sync.h"
 #include "hardware/structs/ioqspi.h"
 #include "hardware/structs/sio.h"
+#endif
 
+#ifdef TARGET_LINUX
+# include "unistd.h"	// usleep()
+# define sleep_ms(ms) usleep((ms)*1000)
+# define gpio_init(pin)
+# define gpio_set_dir_out(pin)
+# define gpio_set_dir(pin, dir)
+# define gpio_put(pin, val)
+# define stdio_init_all()
+# define  stdio_usb_connected() 0
+#endif
+
+#ifdef PICO_TARGET
 // From pico-examples/common/get_bootsel_button.c
 bool __no_inline_not_in_flash_func(get_bootsel_button)() {
     const uint CS_PIN_INDEX = 1;
@@ -31,6 +47,9 @@ bool __no_inline_not_in_flash_func(get_bootsel_button)() {
     restore_interrupts(flags);
     return button_state;
 }
+#else
+bool get_bootsel_button() { return 0; }
+#endif
 
 
 #define LED_PIN 25

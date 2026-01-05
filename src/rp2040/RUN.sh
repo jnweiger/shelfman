@@ -1,7 +1,7 @@
 sudo apt update
 sudo apt install cmake gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential
 
-(cd pico-sdk; git submodule update --init)
+(cd pico-sdk; git submodule update --init --recursive)
 export PICO_SDK_PATH=$PWD/pico-sdk
 
 cd blink
