@@ -14,12 +14,31 @@
 # include "pico/stdlib.h"
 # include "hardware/rtc.h"
 # include "hardware/rng.h"
+# include "hardware/gpio.h"
+# include "hardware/sync.h"
+# include "hardware/structs/ioqspi.h"
+# include "hardware/structs/sio.h"
 #endif
 
 #define DEBUG 0
+
 #define BIG_FONT_SIZE 24
 #define SMALL_FONT_SIZE 18
 #define LINE_ADVANCE_FACTOR 1.9
+
+struct qr_config {
+	// config for brother D410
+	unsigned max_height;		// my tape can print 120, although the printer could print 128.
+	unsigned big_font_size;
+	unsigned small_font_size;
+	unsigned line_advance_perc;
+
+	unsigned hspace;
+	unsigned vspace;
+	const char *title_text;
+	const char *label_text_pre;
+	const char *outfile;
+};
 
 #ifndef WITH_PNG_SUPPORT
 # define WITH_PNG_SUPPORT 1		// 1 or 0 to enable disable the png loader code.
@@ -152,7 +171,7 @@ uint32_t rand32(void)
 {
 #ifdef __linux__
     return (rand() ^ (rand() << 15));	// make very sure, we have all 32bits.
-#else
+#else  // RP2040 Pico SDK
     uint32_t r;
     rng_hw_get_bytes(&r, sizeof(r));
     return r;
@@ -327,38 +346,13 @@ unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, str
     return x - orig_x;
 }
 
-
-int main(int ac, char **av)
+int gen_qrcode_tag(struct qr_config *cfg, const char *letter)
 {
-	// config for brother D410
-	unsigned max_height = 120;		// my tape can print 120, although the printer could print 128.
-	unsigned hspace = 16;
-	unsigned vspace = 8;
-	const char *title_text = "JW";
-	const char *label_text_pre = "shelfman.de/";
-	const char *code_text = "-";
-#if WITH_PNG_SUPPORT
-	const char *outfile = "shelfman_guid_qr.pgm";	// FIXME: this should be a png file, see FIXME at end of main()
-#else
-	const char *outfile = "shelfman_guid_qr.pgm";
-#endif
-
-#if WITH_PNG_SUPPORT
-	unsigned char* pngimage = NULL;
-#endif
 	unsigned width, height;
 	char uid16[40];
-
-#ifdef __linux__
-    srand(time(NULL));
-#else
-    stdio_init_all();
-    rtc_init();
-#endif
-    const char *letter = "X";
-	if (ac > 1) letter = av[1];
+	const char *code_text = "-";
 	char label_text[40];
-	snprintf(label_text, 40, "%s%s/", label_text_pre, letter);
+	snprintf(label_text, 40, "%s%s/", cfg->label_text_pre, letter);
 
     sprintf(uid16, "SFM-%s-", letter);
 	hex16_string(uid16+strlen(uid16));
@@ -367,11 +361,11 @@ int main(int ac, char **av)
 #endif
 	code_text = uid16;
 
-    font *small_font = find_font(SMALL_FONT_SIZE);
-    font *big_font   = find_font(BIG_FONT_SIZE);
+    font *small_font = find_font(cfg->small_font_size);
+    font *big_font   = find_font(cfg->big_font_size);
 
 	// measure lengths
-    unsigned title_w = draw_text(NULL, 0, 0, title_text, big_font, 0);
+    unsigned title_w = draw_text(NULL, 0, 0, cfg->title_text, big_font, 0);
 	unsigned label_w = draw_text(NULL, 0, 0, label_text, small_font, 0);
 	unsigned code_w  = draw_text(NULL, 0, 0, code_text,  small_font, 0);
 
@@ -380,25 +374,32 @@ int main(int ac, char **av)
 	if (label_w > max_text_w) max_text_w = label_w;
 	if (code_w  > max_text_w) max_text_w = code_w;
 
+    unsigned computed_width = cfg->max_height + cfg->hspace + max_text_w + cfg->hspace;
+
 #if DEBUG > 1
 	printf("title_w=%d, label_w=%d, code_w=%d\n", title_w, label_w, code_w);
 #endif
 #if WITH_PNG_SUPPORT
-    if (ac > 2)
+    unsigned char *pngimage = NULL;
+    if (cfg->input_png_file)
 	{
-		unsigned error = lodepng_decode32_file(&pngimage, &width, &height, av[2]);
+		unsigned error = lodepng_decode32_file(&pngimage, &width, &height, cfg->input_png_file);
 		if (error) {
-			printf("%s %s %s: PNG error %u: %s\n", av[0], av[1], av[2], error, lodepng_error_text(error));
+			printf("%s: PNG error %u: %s\n", cfg->input_png_file, error, lodepng_error_text(error));
 			return 1;
 		}
 		printf("Loaded PNG %ux%u\n", width, height);
+#if DEBUG > 0
+        if (width < c_width)
+		    printf("WARNING: computed width for qr-code and text is %u\n", c_width);
+#endif
 	}
 	else
 #endif
 	{
-        width = max_height + hspace + max_text_w + hspace;
+        width = computed_width;
 
-		height = max_height;
+		height = cfg->max_height;
 #if DEBUG > 0
 		printf("canvas size: %ux%u\n", width, height);
 #endif
@@ -407,7 +408,7 @@ int main(int ac, char **av)
     struct img *bw = img_new(width, height, 255);
 
 #if WITH_PNG_SUPPORT
-    if (ac > 2)
+    if (pngimage)
 	{
 		// pngimage is now width*height*4 RGBA bytes.
 		// Convert to black and white, as bytes.
@@ -429,17 +430,17 @@ int main(int ac, char **av)
 #endif
 	if (qrsize < 0) return 1;
 
-    int y = vspace/2;
+    int y = cfg->vspace/2;
     // write some font,
 #if 0
     draw_text(bw, qrsize, y,    "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG.", small_font, 0);
     draw_text(bw, qrsize, y+50, "the quick brown fox jumps over the lazy dog.", big_font, 0);
 #else
-	draw_text(bw, qrsize + hspace + int((max_text_w - title_w)/2), y, title_text, big_font, 0);
-	y = y + int(LINE_ADVANCE_FACTOR * BIG_FONT_SIZE);
-	draw_text(bw, qrsize + hspace + int((max_text_w - label_w)/2), y, label_text, small_font, 0);
-	y = y + int(LINE_ADVANCE_FACTOR * SMALL_FONT_SIZE);
-	draw_text(bw, qrsize + hspace + int((max_text_w - code_w)/2),  y, code_text,  small_font, 0);
+	draw_text(bw, qrsize + cfg->hspace + int((max_text_w - title_w)/2), y, cfg->title_text, big_font, 0);
+	y = y + int(cfg->line_advance_perc * cfg->big_font_size / 100);
+	draw_text(bw, qrsize + cfg->hspace + int((max_text_w - label_w)/2), y, label_text, small_font, 0);
+	y = y + int(cfg->line_advance_perc * cfg->small_font_size / 100);
+	draw_text(bw, qrsize + cfg->hspace + int((max_text_w - code_w)/2),  y, code_text,  small_font, 0);
 #endif
 
 #ifdef WITH_PNG_SUPPORT
@@ -450,13 +451,142 @@ int main(int ac, char **av)
 
 #ifdef WITH_PNG_SUPPORT
     // FIXME, we should not save a PGM file here, we should save a proper PNG.
-    img_save(bw, outfile);
+    img_save(bw, cfg->outfile);
 #else
     // save as PGM
-    img_save(bw, outfile);
+    img_save(bw, cfg->outfile);
 #endif
 
     img_free(bw);
     return 0;
 }
 
+
+#ifndef __linux__ // RP2040 Pico SDK
+// From pico-examples/common/get_bootsel_button.c
+bool __no_inline_not_in_flash_func(get_bootsel_button)() {
+    const uint CS_PIN_INDEX = 1;
+
+    // Disable interrupts (flash access might be interrupted)
+    uint32_t flags = save_and_disable_interrupts();
+
+    // Float the flash CS pin (Hi-Z)
+    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
+        GPIO_OVERRIDE_LOW << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+
+    // Small delay (can't sleep, no flash access)
+    for (volatile int i = 0; i < 1000; ++i);
+
+    // Read pin state via SIO (button pulls low when pressed)
+    bool button_state = !(sio_hw->gpio_hi_in & (1u << CS_PIN_INDEX));
+
+    // Restore flash CS
+    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
+        GPIO_OVERRIDE_NORMAL << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+
+    restore_interrupts(flags);
+    return button_state;
+}
+
+
+#define LED_PIN 25
+
+#define BLINK_DIT	blink(0)
+#define BLINK_DAH	blink(1)
+
+struct qr_config *global_qrcode_cfg = NULL;
+
+bool sleep100ms_bs(unsigned n)
+{
+    static bool prev_bootsel_state = 0;
+	bool state = get_bootsel_button();
+
+	for (unsigned i=0; i < n; i++)
+	{
+		sleep_ms(100);
+		bool state = get_bootsel_button();
+		if (state != prev_bootsel_state)
+		{
+			prev_bootsel_state = state;
+			if (state)
+			{
+				if (stdio_usb_connected())
+					printf("BOOTSEL pressed!\n");
+				gen_qrcode_tag(global_qrcode_cfg, 'X');
+			}
+			else
+			{
+				if (stdio_usb_connected())
+					printf("BOOTSEL released!\n");
+			}
+		}
+	}
+	return state;
+}
+
+
+int blink(bool dah)
+{
+	gpio_put(LED_PIN, 1);
+	(void)sleep100ms_bs(dah?3:1);
+	gpio_put(LED_PIN, 0);
+	(void)sleep100ms_bs(1);
+}
+#endif // __linux__ // RP2040 Pico SDK
+
+
+int main(int ac, char **av)
+{
+    struct qr_config cfg;
+	// config for brother D410
+	cfg.max_height = 120;		// my tape can print 120, although the printer could print 128.
+	cfg.big_font_size = BIG_FONT_SIZE;
+	cfg.small_font_size = SMALL_FONT_SIZE;
+	cfg.line_advance_perc = int(100 * LINE_ADVANCE_FACTOR);
+	cfg.hspace = 16;
+	cfg.vspace = 8;
+	cfg.title_text = "JW";
+	cfg.label_text_pre = "shelfman.de/";
+
+#if WITH_PNG_SUPPORT
+	cfg.outfile = "shelfman_guid_qr.pgm";	// FIXME: this should be a png file, see FIXME at end of main()
+#else
+	cfg.outfile = "shelfman_guid_qr.pgm";
+#endif
+
+#if WITH_PNG_SUPPORT
+	if (ac > 2)
+		cfg.input_png_file = av[2];
+	else
+		cfg.input_png_file = NULL;
+#endif
+
+#ifdef __linux__
+
+    srand(time(NULL));
+    const char *letter = "X";
+	if (ac > 1) letter = av[1];
+    gen_qrcode_tag(&cfg, letter);
+
+#else  // RP2040 Pico SDK
+
+    gpio_init(LED_PIN);
+    gpio_set_dir(LED_PIN, GPIO_OUT);
+    stdio_init_all();
+    rtc_init();
+	global_qrcode_cfg = cfg;
+
+	// say Hi in Morse code ...
+    while (true)
+	{
+        BLINK_DIT; BLINK_DIT; BLINK_DIT; BLINK_DIT;
+	    (void)sleep100ms_bs(2);	// total of 3. one already done in the last BLINK_DIT
+        BLINK_DIT; BLINK_DIT;
+	    (void)sleep100ms_bs(6);	// total of 7.
+	}
+#endif
+
+	return 0;
+}

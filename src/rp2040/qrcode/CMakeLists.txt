@@ -13,7 +13,7 @@ project(qrcode C CXX ASM)
 
 pico_sdk_init()
 
-add_executable(qrcode main.c ${QRCODE_DIR}/qrcodegen.c)
+add_executable(../../shelfman-qrcode.c ${QRCODE_DIR}/qrcodegen.c)
 target_compile_definitions(qrcode PRIVATE TARGET_PICO=1)
 target_include_directories(qrcode PRIVATE ${QRCODE_DIR} ${PTOUCH_DIR} ${GFXFONT_DIR})
 
