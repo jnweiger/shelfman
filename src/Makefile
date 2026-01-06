@@ -10,6 +10,12 @@ DEPENDENCIES=$(QRCODE_DIR)/qrcodegen.c
 
 # need g++ here, so that lodepng.cpp is not ignored.
 
-all: shelfman-qrcode.c
+all: shelfman-qrcode rp2040
 	g++ $(CFLAGS) $(INC_DIRS) -o shelfman-qrcode shelfman-qrcode.c $(DEPENDENCIES)
 
+.PHONY: rp2040
+rp2040:
+	mkdir -p rp2040/blink/build
+	cd rp2040/blink/build; cmake .. && make
+	mkdir -p rp2040/build
+	cd rp2040/build; cmake .. && make
