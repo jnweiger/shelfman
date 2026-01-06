@@ -4,17 +4,18 @@
 
 cmake_minimum_required(VERSION 3.13)
 
-set(QRCODE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../QR-Code-generator/c)
-set(PTOUCH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../ptouch-print/src)
-set(GFXFONT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../Adafruit-GFX-library)
+set(QRCODE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../QR-Code-generator/c)
+set(PTOUCH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../ptouch-print/src)
+set(GFXFONT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../Adafruit-GFX-Library)
 get_filename_component(PICO_SDK_PATH "../pico-sdk" ABSOLUTE)
 include(${PICO_SDK_PATH}/pico_sdk_init.cmake)
 project(qrcode C CXX ASM)
 
 pico_sdk_init()
 
-add_executable(../../shelfman-qrcode.c ${QRCODE_DIR}/qrcodegen.c)
+add_executable(qrcode ../../shelfman-qrcode.c ${QRCODE_DIR}/qrcodegen.c)
 target_compile_definitions(qrcode PRIVATE TARGET_PICO=1)
+target_compile_definitions(qrcode PRIVATE WITH_PNG_SUPPORT=0)
 target_include_directories(qrcode PRIVATE ${QRCODE_DIR} ${PTOUCH_DIR} ${GFXFONT_DIR})
 
 target_link_libraries(qrcode pico_stdlib)

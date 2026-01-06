@@ -2,26 +2,27 @@
  * we only need one byte (gray) or one bit bw today.
  */
 
+# include <stdlib.h>	// for free()
+# include <stdio.h>		// for printf()
+# include <string.h>	// for memset()
+
 #ifdef __linux__
 # include <assert.h>	// for assert()
-# include <stdlib.h>	// for free()
-# include <stdio.h>	// for printf()
 # include <fcntl.h>	// O_RDWR
 # include <unistd.h>	// write()
 # include <stdint.h>	// uint8_t, uint16_t
-# include <string.h>
 # include <time.h>
 #else  // RP2040 Pico SDK
 # include "pico/stdlib.h"
-# include "hardware/rtc.h"
-# include "hardware/rng.h"
+// # include "hardware/rtc.h"
+// # include "hardware/rng.h"
 # include "hardware/gpio.h"
 # include "hardware/sync.h"
 # include "hardware/structs/ioqspi.h"
 # include "hardware/structs/sio.h"
 #endif
 
-#define DEBUG 0
+#define DEBUG 1
 
 #define BIG_FONT_SIZE 24
 #define SMALL_FONT_SIZE 18

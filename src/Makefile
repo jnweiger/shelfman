@@ -22,5 +22,11 @@ shelfman-qrcode: shelfman-qrcode.c
 rp2040:
 	mkdir -p rp2040/blink/build
 	cd rp2040/blink/build; cmake .. && make
-	mkdir -p rp2040/build
-	cd rp2040/build; cmake .. && make
+	mkdir -p rp2040/qrcode/build
+	cd rp2040/qrcode/build; cmake .. && make
+
+
+clean:
+	rm -f *.o shelfman-qrcode
+	cd rp2040/blink/build; test -f Makefile && make clean || true
+	cd rp2040/qrcode/build; test -f Makefile && make clean || true
