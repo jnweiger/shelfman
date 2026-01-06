@@ -3,6 +3,7 @@
  */
 
 #ifdef __linux__
+# include <assert.h>	// for assert()
 # include <stdlib.h>	// for free()
 # include <stdio.h>	// for printf()
 # include <fcntl.h>	// O_RDWR
@@ -89,14 +90,19 @@ struct font {
 
 struct img {
   unsigned w, h;
+  unsigned bits_per_val;
   unsigned char data[0];
 };
 
-struct img *img_new(unsigned w, unsigned h, unsigned char val)
+struct img *img_new(unsigned w, unsigned h, int bits_per_val, unsigned char val)
 {
-    struct img *im = (struct img *)calloc(sizeof(struct img) + w * h, 1);
+	assert( (bits_per_val == 8) || (bits_per_val == 1) );
+
+    int data_len = (bits_per_val == 1) ? (w * h / 8 + 1) : (w * h);
+    struct img *im = (struct img *)calloc(sizeof(struct img) + data_len, 1);
     im->w = w; im->h = h;
-	memset(im->data, val, w * h);
+	im->bits_per_val = bits_per_val;
+	memset(im->data, val, data_len);
 	return im;
 }
 
@@ -138,32 +144,40 @@ void blit(struct img *src, unsigned sx, unsigned sy, unsigned sw, unsigned sh,
           struct img *dst, unsigned dx, unsigned dy,
           unsigned char flags)
 {
-    // flags |= 0x40 : do not copy black pixels
-    // flags |= 0x80 : do not copy white pixels
-    // reaining bits: (flags & 0x3f):	spread, min 1.
-    unsigned char *ps = src->data + sy*src->w + sx;
-    // unsigned char *pd = dst->data + dy*dst->w + dx;
-    unsigned copy_b = (flags & 0x40) ? 0 : 1;
-    unsigned copy_w = (flags & 0x80) ? 0 : 1;
-    unsigned spread = (flags & 0x3f);
-	if (!spread) spread = 1;
+	assert(src->bits_per_val == dst->bits_per_val);
+    if (src->bits_per_val == 8)
+	{
+		// flags |= 0x40 : do not copy black pixels
+		// flags |= 0x80 : do not copy white pixels
+		// reaining bits: (flags & 0x3f):	spread, min 1.
+		unsigned char *ps = src->data + sy*src->w + sx;
+		// unsigned char *pd = dst->data + dy*dst->w + dx;
+		unsigned copy_b = (flags & 0x40) ? 0 : 1;
+		unsigned copy_w = (flags & 0x80) ? 0 : 1;
+		unsigned spread = (flags & 0x3f);
+		if (!spread) spread = 1;
 
-    for (unsigned j = 0; j < sh; j++)
-    {
-		for (unsigned i = 0; i < sw; i++)
+		for (unsigned j = 0; j < sh; j++)
 		{
-		    if (((sx + i) < (src->w)) &&
-			    ((sy + j) < (src->h)))
+			for (unsigned i = 0; i < sw; i++)
 			{
-			    // We are inside the src image
-		        unsigned val = ps[j*src->w + i];
-				if ((val == 0) ? copy_b : copy_w)
+				if (((sx + i) < (src->w)) &&
+					((sy + j) < (src->h)))
 				{
-			        rectangle(dst, dx + spread * i, dy + spread * j, spread, spread, val);
+					// We are inside the src image
+					unsigned val = ps[j*src->w + i];
+					if ((val == 0) ? copy_b : copy_w)
+					{
+						rectangle(dst, dx + spread * i, dy + spread * j, spread, spread, val);
+					}
 				}
 			}
 		}
-    }
+	}
+	else
+	{
+		assert(dst->bits_per_val == 8);	// 1 not impleented
+	}
 }
 
 
@@ -278,14 +292,19 @@ void bits2bytes(const uint8_t *bitmap, uint8_t *output, uint16_t width, uint16_t
 }
 
 
-GFXglyph *extract_glyph(struct font *f, unsigned char ch, uint8_t *output, unsigned fg)
+GFXglyph *extract_glyph(struct font *f, unsigned char ch, uint8_t *output, unsigned bits_per_val, unsigned fg)
 {
     GFXglyph *glyph = &(f->ptr->glyph[ ch - f->ptr->first ]);
 
 	if (ch < f->ptr->first || ch > f->ptr->last) return NULL;
 
     if (output)
-	    bits2bytes(f->ptr->bitmap + glyph->bitmapOffset, output, glyph->width, glyph->height, fg);
+	{
+		if (bits_per_val == 8)
+			bits2bytes(f->ptr->bitmap + glyph->bitmapOffset, output, glyph->width, glyph->height, fg);
+		else
+			assert(bits_per_val == 1);	// FIXME: simple memcopy needed here
+	}
 
 	return glyph;
 }
@@ -304,9 +323,9 @@ unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, str
 		for (unsigned c=0; c < tlen; c++)
 		{
 			char ch = text[c];
-			GFXglyph *g = extract_glyph(f, ch, NULL, 0);
+			GFXglyph *g = extract_glyph(f, ch, NULL, 0, 0);
 			if (!g)
-				g = extract_glyph(f, '_', NULL, 0);
+				g = extract_glyph(f, '_', NULL, 0, 0);
 			if (g)
 		        x += f->scale * g->xAdvance;
 		}
@@ -320,24 +339,24 @@ unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, str
 	{
 		// CAUTION: keep in sync with measurement code above.
 	    char ch = text[c];
-		GFXglyph *g = extract_glyph(f, ch, NULL, 0);
+		GFXglyph *g = extract_glyph(f, ch, NULL, 0, 0);
 		if (!g)
 		{
 		    printf("ERROR: glyph not found: '%c' -> replacing with '_'\n", ch);
 			ch = '_';
-		    g = extract_glyph(f, ch, NULL, 0);
+		    g = extract_glyph(f, ch, NULL, 0, 0);
 		    if (!g)
 			{
 				printf("ERROR: replacment glyph also not found: '%c'\n", ch);
 				exit(1);
 			}
 		}
-		struct img *glyph_buf = img_new(g->width, g->height, 255);
+		struct img *glyph_buf = img_new(g->width, g->height, 8, 255);
 
 #if DEBUG > 1
 		printf("glyph dimension of '%c' (%d x %d) @ xAdv=%d, xOff=%d, yOff=%d\n", text[c], g->width, g->height, g->xAdvance, g->xOffset, g->yOffset);
 #endif
-		(void)extract_glyph(f, ch, glyph_buf->data, 0);
+		(void)extract_glyph(f, ch, glyph_buf->data, 8, 0);
 		blit(glyph_buf, 0, 0, g->width, g->height,
 			 im, x + (f->scale * g->xOffset), y + (f->scale * (g->yOffset - f->max_asc)), f->scale);
 		x += f->scale * g->xAdvance;
@@ -405,7 +424,7 @@ int gen_qrcode_tag(struct qr_config *cfg, const char *letter)
 #endif
 	}
 
-    struct img *bw = img_new(width, height, 255);
+    struct img *bw = img_new(width, height, 8, 255);
 
 #if WITH_PNG_SUPPORT
     if (pngimage)

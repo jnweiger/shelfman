@@ -10,7 +10,10 @@ DEPENDENCIES=$(QRCODE_DIR)/qrcodegen.c
 
 # need g++ here, so that lodepng.cpp is not ignored.
 
-all: shelfman-qrcode rp2040
+all: linux rp2040
+
+.PHONY: linux
+linux: shelfman-qrcode
 
 shelfman-qrcode: shelfman-qrcode.c
 	g++ $(CFLAGS) $(INC_DIRS) -o shelfman-qrcode shelfman-qrcode.c $(DEPENDENCIES)
