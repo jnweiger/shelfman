@@ -5,6 +5,7 @@
 # include <stdlib.h>	// for free()
 # include <stdio.h>		// for printf()
 # include <string.h>	// for memset()
+# include <errno.h>
 
 #ifdef __linux__
 # include <assert.h>	// for assert()
@@ -12,18 +13,22 @@
 # include <unistd.h>	// write()
 # include <stdint.h>	// uint8_t, uint16_t
 # include <time.h>
+# include <sys/random.h>	// getrandom()
+# define sleep_ms(n) usleep(1000*(n))
 #else  // RP2040 Pico SDK
+# include "rp2040.h"
 # include "pico/stdlib.h"
 // # include "hardware/rtc.h"
 // # include "hardware/rng.h"
 # include "hardware/gpio.h"
-# include "hardware/sync.h"
-# include "hardware/structs/ioqspi.h"
-# include "hardware/structs/sio.h"
+// # include "hardware/sync.h"
+// # include "hardware/structs/ioqspi.h"
+// # include "hardware/structs/sio.h"
 #endif
 
 #define DEBUG 1
 
+#define BITS_PER_PIXEL 1	// 1 or 8.	both is implemented here.
 #define BIG_FONT_SIZE 24
 #define SMALL_FONT_SIZE 18
 #define LINE_ADVANCE_FACTOR 1.9
@@ -107,25 +112,108 @@ struct img *img_new(unsigned w, unsigned h, int bits_per_val, unsigned char val)
 	return im;
 }
 
+
 void img_free(struct img *im)
 {
     free((void *)(im));
 }
 
+
+unsigned get_pixel(struct img *im, int x, int y)
+{
+	// CAUTION: keep in sync with bits2img_fg() below.
+    uint32_t pos = im->w * y + x;
+	if (im->bits_per_val == 8)
+		return im->data[pos];
+
+	uint16_t byte_idx = (pos / 8);
+	uint8_t bit_idx = 7 - (pos % 8);
+	if (im->data[byte_idx] & (1 << bit_idx))
+		return 255;
+	return 0;
+}
+
+
+void set_pixel(struct img *im, int pos, int val)
+{
+	if (im->bits_per_val == 8)
+		im->data[pos] = val;
+	else
+	{
+		uint16_t byte_idx = (pos / 8);
+		uint8_t bit_idx = 7 - (pos % 8);
+		if (val)
+			im->data[byte_idx] |= 1<<bit_idx;
+		else
+			im->data[byte_idx] &= ~(1<<bit_idx);
+	}
+}
+
+
 void img_save(struct img *im, const char *filename)
 {
+#ifdef __linux__
     char buf[32];
-    int fd = open("output.pgm", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    int len = snprintf(buf, sizeof(buf), "P5\n%u %u\n255\n", im->w, im->h);
+    int len;
+	if (im->bits_per_val == 8)
+	    len = snprintf(buf, sizeof(buf), "P5\n%u %u\n255\n", im->w, im->h);
+	else
+	    len = snprintf(buf, sizeof(buf), "P1\n%u %u\n", im->w, im->h);
+    int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     write(fd, buf, len);
-    write(fd, im->data, im->w* im->h);
+	if (im->bits_per_val == 8)
+		write(fd, im->data, im->w * im->h);	// pgm binary format is identical to what we store in struct img.
+	else
+	{
+		// I am lazy: P4 pbm binary is slightly different than struct img: it needs line padding and has bits flipped.
+		// P1 pbm ascii is simpler.
+		unsigned pos = 0;
+		for (unsigned y=0; y < im->h; y++)
+		{
+			for (unsigned x=0; x < im->w; x++)
+			{
+				write(fd, get_pixel(im, x, y) ? "0" : "1", 1);	// white = 0, black = 1, no whitespace needed.
+				if (++pos % 64 == 0)
+					write(fd, "\n", 1);
+			}
+		}
+	}
     close(fd);
+#else  // RP2040 Pico SDK
+	// we don't have a filesystem, we debug print to stdout.
+	printf("##########################\n");
+	if (im->bits_per_val == 8)
+	{
+		printf("P2\n%u %u\n255\n", im->w, im->h);
+		for (unsigned i=0; i < im->w * im->h; i++)
+		{
+			printf("%d ", im->data[i]);
+			if (i % 32 == 31)
+			   printf("\n");
+		}
+	}
+	else
+	{
+		unsigned pos = 0;
+        printf("P1\n%u %u\n", im->w, im->h);
+		for (unsigned y=0; y < im->h; y++)
+		{
+			for (unsigned x=0; x < im->w; x++)
+			{
+				printf( get_pixel(im, x, y) ? "0" : "1" );	// white = 0, black = 1, no whitespace needed.
+				if (++pos % 64 == 0)
+					printf("\n");
+			}
+		}
+	}
+	printf("\n##########################\n");
+#endif
 }
 
 
 void rectangle(struct img *im, unsigned x, unsigned y, unsigned w, unsigned h, unsigned val)
 {
-    unsigned char *p = im->data + y*im->w + x;
+    // unsigned char *p = im->data + y*im->w + x;
 
     for (unsigned int j = 0; j < h; j++)
     {
@@ -134,7 +222,8 @@ void rectangle(struct img *im, unsigned x, unsigned y, unsigned w, unsigned h, u
 		    if (((x + i) < (im->w)) &&
 			    ((y + j) < (im->h)))
 			{
-				p[j*im->w + i] = val;
+				// p[j*im->w + i] = val;
+				set_pixel(im, im->w * (y + j) + x + i, val);
 			}
 		}
 	}
@@ -146,51 +235,49 @@ void blit(struct img *src, unsigned sx, unsigned sy, unsigned sw, unsigned sh,
           unsigned char flags)
 {
 	assert(src->bits_per_val == dst->bits_per_val);
-    if (src->bits_per_val == 8)
-	{
-		// flags |= 0x40 : do not copy black pixels
-		// flags |= 0x80 : do not copy white pixels
-		// reaining bits: (flags & 0x3f):	spread, min 1.
-		unsigned char *ps = src->data + sy*src->w + sx;
-		// unsigned char *pd = dst->data + dy*dst->w + dx;
-		unsigned copy_b = (flags & 0x40) ? 0 : 1;
-		unsigned copy_w = (flags & 0x80) ? 0 : 1;
-		unsigned spread = (flags & 0x3f);
-		if (!spread) spread = 1;
+	// flags |= 0x40 : do not copy black pixels
+	// flags |= 0x80 : do not copy white pixels
+	// remaining bits: (flags & 0x3f):	spread, min 1.
 
-		for (unsigned j = 0; j < sh; j++)
+	// unsigned char *ps = src->data + sy*src->w + sx;
+	// unsigned char *pd = dst->data + dy*dst->w + dx;
+	unsigned copy_b = (flags & 0x40) ? 0 : 1;
+	unsigned copy_w = (flags & 0x80) ? 0 : 1;
+	unsigned spread = (flags & 0x3f);
+	if (!spread) spread = 1;
+
+	for (unsigned j = 0; j < sh; j++)
+	{
+		for (unsigned i = 0; i < sw; i++)
 		{
-			for (unsigned i = 0; i < sw; i++)
+			if (((sx + i) < (src->w)) &&
+				((sy + j) < (src->h)))
 			{
-				if (((sx + i) < (src->w)) &&
-					((sy + j) < (src->h)))
+				// We are inside the src image
+				unsigned val = get_pixel(src, sx + i, sy + j);
+				if ((val == 0) ? copy_b : copy_w)
 				{
-					// We are inside the src image
-					unsigned val = ps[j*src->w + i];
-					if ((val == 0) ? copy_b : copy_w)
-					{
-						rectangle(dst, dx + spread * i, dy + spread * j, spread, spread, val);
-					}
+					rectangle(dst, dx + spread * i, dy + spread * j, spread, spread, val);
 				}
 			}
 		}
-	}
-	else
-	{
-		assert(dst->bits_per_val == 8);	// 1 not impleented
 	}
 }
 
 
 uint32_t rand32(void)
 {
-#ifdef __linux__
-    return (rand() ^ (rand() << 15));	// make very sure, we have all 32bits.
-#else  // RP2040 Pico SDK
-    uint32_t r;
-    rng_hw_get_bytes(&r, sizeof(r));
-    return r;
+	uint32_t r;
+	for (int i = 0; i < 100; i++)
+	{
+		if (getrandom(&r, sizeof(r), 0)  == sizeof(r))
+			return r;
+		sleep_ms(100);
+	}
+#if DEBUG > 0
+	printf("ERROR: getrandom failed 100 times. errno=%d\n", errno);
 #endif
+	return 0;
 }
 
 
@@ -212,7 +299,7 @@ int render_qrcode(struct img *im, unsigned x, unsigned y, unsigned margin, const
     unsigned spread = (flags & 0x3f);
 	if (!spread) spread = 1;
 
-	qrcodegen_Ecc ecc = qrcodegen_Ecc_QUARTILE;
+	enum qrcodegen_Ecc ecc = qrcodegen_Ecc_QUARTILE;
 
 	if      (ecc_letter[0] == 'L') ecc=qrcodegen_Ecc_LOW;
 	else if (ecc_letter[0] == 'M') ecc=qrcodegen_Ecc_MEDIUM;
@@ -274,11 +361,12 @@ struct font *find_font(int size)
 }
 
 
-void bits2bytes(const uint8_t *bitmap, uint8_t *output, uint16_t width, uint16_t height, unsigned fg)
+// set forground color in output pixels, where bitmap bit is set.
+void bits2img_fg(const uint8_t *bitmap, struct img *output, uint16_t width, uint16_t height, unsigned fg)
 {
-    uint16_t pos = 0;
+    uint32_t pos = 0;
 
-    // memset(output, bg, width * height);  // White background, should be done earler
+    // rectangle(output, 0, 0, width, height, bg);  // White background, should be done earler
 
     for(uint16_t y = 0; y < height; y++) {
         for(uint16_t x = 0; x < width; x++) {
@@ -286,26 +374,21 @@ void bits2bytes(const uint8_t *bitmap, uint8_t *output, uint16_t width, uint16_t
             uint16_t byte_idx = (pos / 8);
             uint8_t bit_idx = 7 - (pos % 8);
             if (bitmap[byte_idx] & (1 << bit_idx))
-				output[pos] = fg;
+				set_pixel(output, pos, fg);
             pos++;
         }
     }
 }
 
 
-GFXglyph *extract_glyph(struct font *f, unsigned char ch, uint8_t *output, unsigned bits_per_val, unsigned fg)
+GFXglyph *extract_glyph(struct font *f, unsigned char ch, struct img *output, unsigned bits_per_val, unsigned fg)
 {
     GFXglyph *glyph = &(f->ptr->glyph[ ch - f->ptr->first ]);
 
 	if (ch < f->ptr->first || ch > f->ptr->last) return NULL;
 
     if (output)
-	{
-		if (bits_per_val == 8)
-			bits2bytes(f->ptr->bitmap + glyph->bitmapOffset, output, glyph->width, glyph->height, fg);
-		else
-			assert(bits_per_val == 1);	// FIXME: simple memcopy needed here
-	}
+		bits2img_fg(f->ptr->bitmap + glyph->bitmapOffset, output, glyph->width, glyph->height, fg);
 
 	return glyph;
 }
@@ -352,12 +435,12 @@ unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, str
 				exit(1);
 			}
 		}
-		struct img *glyph_buf = img_new(g->width, g->height, 8, 255);
+		struct img *glyph_buf = img_new(g->width, g->height, BITS_PER_PIXEL, 255);
 
 #if DEBUG > 1
 		printf("glyph dimension of '%c' (%d x %d) @ xAdv=%d, xOff=%d, yOff=%d\n", text[c], g->width, g->height, g->xAdvance, g->xOffset, g->yOffset);
 #endif
-		(void)extract_glyph(f, ch, glyph_buf->data, 8, 0);
+		(void)extract_glyph(f, ch, glyph_buf, BITS_PER_PIXEL, 0);
 		blit(glyph_buf, 0, 0, g->width, g->height,
 			 im, x + (f->scale * g->xOffset), y + (f->scale * (g->yOffset - f->max_asc)), f->scale);
 		x += f->scale * g->xAdvance;
@@ -365,6 +448,7 @@ unsigned draw_text(struct img *im, unsigned x, unsigned y, const char *text, str
 	}
     return x - orig_x;
 }
+
 
 int gen_qrcode_tag(struct qr_config *cfg, const char *letter)
 {
@@ -381,8 +465,8 @@ int gen_qrcode_tag(struct qr_config *cfg, const char *letter)
 #endif
 	code_text = uid16;
 
-    font *small_font = find_font(cfg->small_font_size);
-    font *big_font   = find_font(cfg->big_font_size);
+    struct font *small_font = find_font(cfg->small_font_size);
+    struct font *big_font   = find_font(cfg->big_font_size);
 
 	// measure lengths
     unsigned title_w = draw_text(NULL, 0, 0, cfg->title_text, big_font, 0);
@@ -425,7 +509,7 @@ int gen_qrcode_tag(struct qr_config *cfg, const char *letter)
 #endif
 	}
 
-    struct img *bw = img_new(width, height, 8, 255);
+    struct img *bw = img_new(width, height, BITS_PER_PIXEL, 255);
 
 #if WITH_PNG_SUPPORT
     if (pngimage)
@@ -437,7 +521,7 @@ int gen_qrcode_tag(struct qr_config *cfg, const char *letter)
 			((pngimage[4*i+0] < BW_THRESHOLD) &&	// R
 			 (pngimage[4*i+1] < BW_THRESHOLD) &&	// G
 			 (pngimage[4*i+2] < BW_THRESHOLD)))	// B
-			bw->data[i] = 0;
+				set_pixel(bw, i, 0);
 		}
 		free(pngimage);
 		// bw image is now width*height bytes 0 or 255.
@@ -456,11 +540,11 @@ int gen_qrcode_tag(struct qr_config *cfg, const char *letter)
     draw_text(bw, qrsize, y,    "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG.", small_font, 0);
     draw_text(bw, qrsize, y+50, "the quick brown fox jumps over the lazy dog.", big_font, 0);
 #else
-	draw_text(bw, qrsize + cfg->hspace + int((max_text_w - title_w)/2), y, cfg->title_text, big_font, 0);
-	y = y + int(cfg->line_advance_perc * cfg->big_font_size / 100);
-	draw_text(bw, qrsize + cfg->hspace + int((max_text_w - label_w)/2), y, label_text, small_font, 0);
-	y = y + int(cfg->line_advance_perc * cfg->small_font_size / 100);
-	draw_text(bw, qrsize + cfg->hspace + int((max_text_w - code_w)/2),  y, code_text,  small_font, 0);
+	draw_text(bw, qrsize + cfg->hspace + (int)((max_text_w - title_w)/2), y, cfg->title_text, big_font, 0);
+	y = y + (int)(cfg->line_advance_perc * cfg->big_font_size / 100);
+	draw_text(bw, qrsize + cfg->hspace + (int)((max_text_w - label_w)/2), y, label_text, small_font, 0);
+	y = y + (int)(cfg->line_advance_perc * cfg->small_font_size / 100);
+	draw_text(bw, qrsize + cfg->hspace + (int)((max_text_w - code_w)/2),  y, code_text,  small_font, 0);
 #endif
 
 #ifdef WITH_PNG_SUPPORT
@@ -483,34 +567,6 @@ int gen_qrcode_tag(struct qr_config *cfg, const char *letter)
 
 
 #ifndef __linux__ // RP2040 Pico SDK
-// From pico-examples/common/get_bootsel_button.c
-bool __no_inline_not_in_flash_func(get_bootsel_button)() {
-    const uint CS_PIN_INDEX = 1;
-
-    // Disable interrupts (flash access might be interrupted)
-    uint32_t flags = save_and_disable_interrupts();
-
-    // Float the flash CS pin (Hi-Z)
-    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
-        GPIO_OVERRIDE_LOW << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
-        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
-
-    // Small delay (can't sleep, no flash access)
-    for (volatile int i = 0; i < 1000; ++i);
-
-    // Read pin state via SIO (button pulls low when pressed)
-    bool button_state = !(sio_hw->gpio_hi_in & (1u << CS_PIN_INDEX));
-
-    // Restore flash CS
-    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
-        GPIO_OVERRIDE_NORMAL << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
-        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
-
-    restore_interrupts(flags);
-    return button_state;
-}
-
-
 #define LED_PIN 25
 
 #define BLINK_DIT	blink(0)
@@ -526,7 +582,7 @@ bool sleep100ms_bs(unsigned n)
 	for (unsigned i=0; i < n; i++)
 	{
 		sleep_ms(100);
-		bool state = get_bootsel_button();
+		bool state = get_bootsel_button();	// from rp2040.c
 		if (state != prev_bootsel_state)
 		{
 			prev_bootsel_state = state;
@@ -534,7 +590,7 @@ bool sleep100ms_bs(unsigned n)
 			{
 				if (stdio_usb_connected())
 					printf("BOOTSEL pressed!\n");
-				gen_qrcode_tag(global_qrcode_cfg, 'X');
+				gen_qrcode_tag(global_qrcode_cfg, "X");
 			}
 			else
 			{
@@ -564,16 +620,16 @@ int main(int ac, char **av)
 	cfg.max_height = 120;		// my tape can print 120, although the printer could print 128.
 	cfg.big_font_size = BIG_FONT_SIZE;
 	cfg.small_font_size = SMALL_FONT_SIZE;
-	cfg.line_advance_perc = int(100 * LINE_ADVANCE_FACTOR);
+	cfg.line_advance_perc = (int)(100 * LINE_ADVANCE_FACTOR);
 	cfg.hspace = 16;
 	cfg.vspace = 8;
 	cfg.title_text = "JW";
 	cfg.label_text_pre = "shelfman.de/";
 
 #if WITH_PNG_SUPPORT
-	cfg.outfile = "shelfman_guid_qr.pgm";	// FIXME: this should be a png file, see FIXME at end of main()
+	cfg.outfile = "output.pgm";	// FIXME: this should be a png file, see FIXME at end of main()
 #else
-	cfg.outfile = "shelfman_guid_qr.pgm";
+	cfg.outfile = "output.pgm";	// FIXME: this should be pbm, if BITS_PER_PIXEL == 1
 #endif
 
 #if WITH_PNG_SUPPORT
@@ -595,8 +651,8 @@ int main(int ac, char **av)
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
     stdio_init_all();
-    rtc_init();
-	global_qrcode_cfg = cfg;
+    // rtc_init();
+	global_qrcode_cfg = &cfg;
 
 	// say Hi in Morse code ...
     while (true)
