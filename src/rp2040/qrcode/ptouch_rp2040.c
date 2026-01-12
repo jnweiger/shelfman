@@ -1,12 +1,34 @@
-// ptouch_rp2040.c – TinyUSB host backend for libptouch-like API
+/*
+ * ptouch_rp2040.c – TinyUSB host backend for libptouch-like API
+ *
+ * USB connects to the printer. This can be done with a USB OTG cable with a micro-USB connector and female USB socket.
+ * E.g. https://www.reichelt.de/de/de/shop/produkt/otg_kabel_usb_micro_b_stecker_auf_usb_2_0_a_buchse-129144
+ *
+ * There is no power supply coming from the printer. Thus we need to power the pico externally.
+ * Pin 39 VSYS is for 3.8 V ... 5.5V input.
+ * Pin 38: GND
+ * Pin 6, (UART1 RX, GPIO5)	connects to Adapter TX
+ * Pin 7, (UART1 RT, GPIO4)	connects to Adapter RX
+ * Pin 8: GND (alternative GND, both are connected internally anyway.)
+ *
+ * CMakeLists.txt:
+ * # Disable USB stdio (printer takes USB)
+ * pico_enable_stdio_usb(qrcode 0)
+ * # Enable UART stdio on UART1
+ * pico_enable_stdio_uart(qrcode 1)
+ *
+ * Code:
+ * stdio_init_all();  // printf() → UART1 (115200 baud)
+ */
 
-#include "tusb.h"
+
+#include "tusb.h"	// Includes tusb_config.h
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
 
 #define PTOUCH_VID   0x04F9   // Brother
-#define PTOUCH_PID   0x2097   // example: replace with PT-D410 from libptouch.c
+#define PTOUCH_PID   0x20DF   // PT-D410 (from libptouch.c)
 
 static uint8_t  g_dev_addr = 0;
 static uint8_t  g_if_num   = 0;
@@ -19,8 +41,13 @@ void tuh_mount_cb(uint8_t dev_addr)
     tusb_desc_device_t const *desc = tuh_descriptor_device_get(dev_addr);
     if (!desc) return;
 
-    if (desc->idVendor == PTOUCH_VID && desc->idProduct == PTOUCH_PID) {
-        // Parse configuration descriptor to find bulk OUT endpoint
+#if DEBUG > 1
+    printf("tuh_mount_cb(%d): found USB device: VID=%4x %s, PID=%4x %s\n", dev_addr,
+		desc->idVendor,  (desc->idVendor  == PTOUCH_VID) ? "Brother" : "",
+		desc->idProduct, (desc->idProduct == PTOUCH_PID) ? "PT-D410" : "");
+#endif
+    if (desc->idVendor == PTOUCH_VID)
+        // It is one of the brother printers. Parse configuration descriptor to find bulk OUT endpoint
         uint8_t cfg[256];
         uint16_t len = tuh_descriptor_get_configuration(dev_addr, 0, cfg, sizeof(cfg));
         if (!len) return;
@@ -35,11 +62,17 @@ void tuh_mount_cb(uint8_t dev_addr)
             if (dtype == TUSB_DESC_INTERFACE) {
                 tusb_desc_interface_t const *itf = (tusb_desc_interface_t const *)p;
                 g_if_num = itf->bInterfaceNumber;
+#if DEBUG > 1
+				printf("tuh_mount_cb(%d): found bInterfaceNumber = %d\n", dev_addr, g_if_num);
+#endif
             } else if (dtype == TUSB_DESC_ENDPOINT) {
                 tusb_desc_endpoint_t const *ep = (tusb_desc_endpoint_t const *)p;
                 if ( (ep->bmAttributes & TUSB_XFER_BULK) &&
                      !(ep->bEndpointAddress & TUSB_DIR_IN) ) {
                     g_ep_out = ep->bEndpointAddress;  // bulk OUT
+#if DEBUG > 1
+					printf("Found bulk OUT bEndpointAddress = %d\n", g_ep_out);
+#endif
                 }
             }
 
@@ -58,6 +91,9 @@ void tuh_umount_cb(uint8_t dev_addr)
         g_ready    = false;
         g_ep_out   = 0;
     }
+#if DEBUG > 1
+	printf("tuh_umount_cb(%d)\n", dev_addr);
+#endif
 }
 
 // Synchronous-ish bulk OUT helper
@@ -139,8 +175,13 @@ int main(void)
     board_init();
     tusb_init(); // Host mode configured via tusb_config.h
 
+    // tuh_printer_mount_cb() → detect D410
+    // tuh_printer_received_132cb() → status responses
+    // tuh_printer_send() → PBM/PNG raster data
+
+
     // Wait for USB host to enumerate printer
-    if (ptouch_open() != 0) {
+    if (ptouch_open() != 0) {	// calls tuh_task() to process USB events (printer detection, data)
         // handle error
     }
 

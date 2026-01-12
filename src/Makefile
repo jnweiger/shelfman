@@ -18,15 +18,25 @@ linux: shelfman-qrcode
 shelfman-qrcode: shelfman-qrcode.c
 	g++ $(CFLAGS) $(INC_DIRS) -o shelfman-qrcode shelfman-qrcode.c $(DEPENDENCIES)
 
-.PHONY: rp2040
+.PHONY: rp2040 clean upload
 rp2040:
 	mkdir -p rp2040/blink/build
 	cd rp2040/blink/build; cmake .. && make
 	mkdir -p rp2040/qrcode/build
 	cd rp2040/qrcode/build; cmake .. && make
+	mkdir -p rp2040/uart_test/build
+	cd rp2040/uart_test/build; cmake .. && make
 
+UPLOAD_NAME=qrcode
+UPLOAD_NAME=uart_test
 
 clean:
 	rm -f *.o shelfman-qrcode
 	cd rp2040/blink/build; test -f Makefile && make clean || true
 	cd rp2040/qrcode/build; test -f Makefile && make clean || true
+	cd rp2040/uart_test/build; test -f Makefile && make clean || true
+
+upload install:
+	@sd=$$(dirname /media/$$USER/*/INDEX.HTM); test "$$sd" != "/media/$$USER/*" && (set -x; cp rp2040/$(UPLOAD_NAME)/build/$(UPLOAD_NAME).uf2 $$sd ) || echo "ERROR: rp2040 usb drive not found. Disconnect USB, press&hold BOOTSEL button, connect USB, wait 3 seconds, release BOOTSEL, then try again."
+
+

@@ -18,12 +18,10 @@
 #else  // RP2040 Pico SDK
 # include "rp2040.h"
 # include "pico/stdlib.h"
-// # include "hardware/rtc.h"
-// # include "hardware/rng.h"
 # include "hardware/gpio.h"
-// # include "hardware/sync.h"
-// # include "hardware/structs/ioqspi.h"
-// # include "hardware/structs/sio.h"
+# include "hardware/uart.h"		// needed for bypassing stdio only.
+
+// # include "tusb.h"	// Includes tusb_config.h
 #endif
 
 #define DEBUG 1
@@ -572,6 +570,14 @@ int gen_qrcode_tag(struct qr_config *cfg, const char *letter)
 #define BLINK_DIT	blink(0)
 #define BLINK_DAH	blink(1)
 
+#if PICO_STDIO_USB_USE_TINYUSB
+# define CONSOLE_READY stdio_usb_connected()
+#elif PICO_STDIO_UART_ENABLED
+# define CONSOLE_READY true
+#else
+# define CONSOLE_READY false	// neither usb nor uart configured.
+#endif
+
 struct qr_config *global_qrcode_cfg = NULL;
 
 bool sleep100ms_bs(unsigned n)
@@ -588,13 +594,13 @@ bool sleep100ms_bs(unsigned n)
 			prev_bootsel_state = state;
 			if (state)
 			{
-				if (stdio_usb_connected())
+				if (CONSOLE_READY)
 					printf("BOOTSEL pressed!\n");
 				gen_qrcode_tag(global_qrcode_cfg, "X");
 			}
 			else
 			{
-				if (stdio_usb_connected())
+				if (CONSOLE_READY)
 					printf("BOOTSEL released!\n");
 			}
 		}
@@ -650,7 +656,24 @@ int main(int ac, char **av)
 
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
-    stdio_init_all();
+    // stdio_init_all();
+
+	// // board_init();	// possible alternative to stdio_init_all(), declared in "bsp/board.h"
+	// tusb_init();		// Host mode configured via tusb_config.h
+
+	// GPIO FIRST - before uart_init()
+    gpio_init(6);
+    gpio_init(7);
+    // FORCE UART1 TX regardless of stdio
+    gpio_set_function(6, GPIO_FUNC_UART);
+    gpio_set_function(7, GPIO_FUNC_UART);
+
+	// UART SECOND - after GPIO
+    uart_init(uart1, 115200);
+	uart_set_hw_flow(uart1, false, false);
+    uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
+
+
     // rtc_init();
 	global_qrcode_cfg = &cfg;
 
@@ -661,7 +684,13 @@ int main(int ac, char **av)
 	    (void)sleep100ms_bs(2);	// total of 3. one already done in the last BLINK_DIT
         BLINK_DIT; BLINK_DIT;
 	    (void)sleep100ms_bs(6);	// total of 7.
-	}
+		// // if (CONSOLE_READY) 
+		// printf("Hi UART!\n");
+
+		// Direct TX test - NO printf needed
+        uart_puts(uart1, "RAW TX TEST\n");
+        sleep_ms(1000);
+    }
 #endif
 
 	return 0;
