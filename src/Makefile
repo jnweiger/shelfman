@@ -27,8 +27,8 @@ rp2040:
 	mkdir -p rp2040/uart_test/build
 	cd rp2040/uart_test/build; cmake .. && make
 
+# UPLOAD_NAME=uart_test
 UPLOAD_NAME=qrcode
-UPLOAD_NAME=uart_test
 
 clean:
 	rm -f *.o shelfman-qrcode

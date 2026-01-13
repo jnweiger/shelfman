@@ -17,9 +17,11 @@
 # define sleep_ms(n) usleep(1000*(n))
 #else  // RP2040 Pico SDK
 # include "rp2040.h"
-# include "pico/stdlib.h"
+# include "pico/stdlib.h"		// sleep_ms(), stdio_init_all()
+#ifdef RAW_UART
 # include "hardware/gpio.h"
 # include "hardware/uart.h"		// needed for bypassing stdio only.
+#endif
 
 // # include "tusb.h"	// Includes tusb_config.h
 #endif
@@ -656,23 +658,7 @@ int main(int ac, char **av)
 
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
-    // stdio_init_all();
-
-	// // board_init();	// possible alternative to stdio_init_all(), declared in "bsp/board.h"
-	// tusb_init();		// Host mode configured via tusb_config.h
-
-	// GPIO FIRST - before uart_init()
-    gpio_init(6);
-    gpio_init(7);
-    // FORCE UART1 TX regardless of stdio
-    gpio_set_function(6, GPIO_FUNC_UART);
-    gpio_set_function(7, GPIO_FUNC_UART);
-
-	// UART SECOND - after GPIO
-    uart_init(uart1, 115200);
-	uart_set_hw_flow(uart1, false, false);
-    uart_set_format(uart1, 8, 1, UART_PARITY_NONE);
-
+    stdio_init_all();		// uart nr. and baud rate chosen in CMakeLists.txt via target_compile_definitions()
 
     // rtc_init();
 	global_qrcode_cfg = &cfg;
@@ -685,10 +671,8 @@ int main(int ac, char **av)
         BLINK_DIT; BLINK_DIT;
 	    (void)sleep100ms_bs(6);	// total of 7.
 		// // if (CONSOLE_READY) 
-		// printf("Hi UART!\n");
+		printf("Hi UART!\n");
 
-		// Direct TX test - NO printf needed
-        uart_puts(uart1, "RAW TX TEST\n");
         sleep_ms(1000);
     }
 #endif
