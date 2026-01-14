@@ -24,6 +24,7 @@ pico_sdk_init()
 add_executable(qrcode
 	../../shelfman-qrcode.c
 	rp2040.c
+	ptouch_rp2040.c
 	${QRCODE_DIR}/qrcodegen.c
 )
 
@@ -46,8 +47,8 @@ target_include_directories(qrcode PRIVATE
 target_link_libraries(qrcode
 	pico_stdlib
 	pico_rand
+	tinyusb_host
 )
-#    	tinyusb_host
 
 pico_enable_stdio_usb(qrcode 0)      # 0: Disable, 1: Enable USB serial		#if PICO_STDIO_USB_USE_TINYUSB
 pico_enable_stdio_uart(qrcode 1)     # 0: Disable, 1: Enable UART TX RX pins	#if PICO_STDIO_UART_ENABLED

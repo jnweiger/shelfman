@@ -4,6 +4,9 @@
  * USB connects to the printer. This can be done with a USB OTG cable with a micro-USB connector and female USB socket.
  * E.g. https://www.reichelt.de/de/de/shop/produkt/otg_kabel_usb_micro_b_stecker_auf_usb_2_0_a_buchse-129144
  *
+ * References:
+ * - https://sourcevu.sysprogs.com/rp2040/lib/tinyusb/symbols/tuh_descriptor_get_device
+ *
  * There is no power supply coming from the printer. Thus we need to power the pico externally.
  * Pin 39 VSYS is for 3.8 V ... 5.5V input.
  * Pin 38: GND
@@ -22,7 +25,7 @@
  */
 
 
-#include "tusb.h"	// Includes tusb_config.h
+#include "ptouch_rp2040.h"	// Includes tusb_config.h via tusb.h
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -38,8 +41,16 @@ static bool     g_ready    = false;
 // TinyUSB host callbacks
 void tuh_mount_cb(uint8_t dev_addr)
 {
-    tusb_desc_device_t const *desc = tuh_descriptor_device_get(dev_addr);
-    if (!desc) return;
+    tusb_desc_device_t desc;
+	// ouch, it takes a callback...
+	// https://sourcevu.sysprogs.com/rp2040/lib/tinyusb/symbols/tuh_descriptor_get_device
+	if (!tuh_descriptor_get_device(dev_addr, &desc, sizeof(desc), tuh_xfer_cb_t complete_cb, uintptr_t user_data))
+	{
+#if DEBUG > 1
+		printf("tuh_mount_cb(%d): tuh_descriptor_get_device() failed\n");
+#endif
+        return;
+	}
 
 #if DEBUG > 1
     printf("tuh_mount_cb(%d): found USB device: VID=%4x %s, PID=%4x %s\n", dev_addr,
@@ -175,7 +186,7 @@ int main(void)
     board_init();
     tusb_init(); // Host mode configured via tusb_config.h
 
-    // tuh_printer_mount_cb() → detect D410
+    // tuh_mount_cb() → detect D410
     // tuh_printer_received_132cb() → status responses
     // tuh_printer_send() → PBM/PNG raster data
 

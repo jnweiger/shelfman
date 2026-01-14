@@ -17,6 +17,7 @@
 # define sleep_ms(n) usleep(1000*(n))
 #else  // RP2040 Pico SDK
 # include "rp2040.h"
+# include "ptouch_rp2040.h"
 # include "pico/stdlib.h"		// sleep_ms(), stdio_init_all()
 #ifdef RAW_UART
 # include "hardware/gpio.h"
@@ -587,6 +588,8 @@ bool sleep100ms_bs(unsigned n)
     static bool prev_bootsel_state = 0;
 	bool state = get_bootsel_button();
 
+	tuh_task();
+
 	for (unsigned i=0; i < n; i++)
 	{
 		sleep_ms(100);
@@ -673,7 +676,7 @@ int main(int ac, char **av)
 		// // if (CONSOLE_READY) 
 		printf("Hi UART!\n");
 
-        sleep_ms(1000);
+        (void)sleep100ms_bs(10);
     }
 #endif
 

@@ -13,7 +13,7 @@
 // No HID or other classes needed
 #define CFG_TUH_HID             0
 
-// tusb_config.h for HOST mode
+// tusb_config.h for HOST mode :-(
 #define CFG_TUH_ENABLED         1
 #define CFG_TUH_DEVICE_MAX      1  // expect 1 printer
 #define CFG_TUH_INTERFACE_MAX   4
